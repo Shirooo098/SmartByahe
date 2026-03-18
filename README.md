@@ -24,7 +24,7 @@ SmartByahe uses a custom-trained YOLO model to detect and classify passengers in
 ---
 
 ## Dataset
-
+To add more dataset, as current 139 images of dataset is not enough.
 Sourced from [Roboflow Universe](https://universe.roboflow.com/johns-workspace-dsz12/bus_passenger/dataset/1).
 
 | Property | Details |
@@ -95,83 +95,6 @@ SmartByahe/
             └── weights/
                 ├── best.pt
                 └── last.pt
-```
-
----
-
-## Usage
-
-### Training
-
-```python
-from ultralytics import YOLO
-
-model = YOLO("yolo26n.pt")
-model.train(
-    data="./dataset/data.yaml",
-    epochs=500,
-    patience=50,
-    imgsz=640,
-    plots=True
-)
-```
-
-### Validation
-
-```python
-metrics = model.val()
-print(f"mAP50:    {metrics.box.map50:.3f}")
-print(f"mAP50-95: {metrics.box.map:.3f}")
-```
-
-### Inference
-
-```python
-from ultralytics import YOLO
-
-model = YOLO("runs/detect/train13/weights/best.pt")
-
-# Single image
-results = model.predict("bus_image.jpg", conf=0.5, save=True, show=True)
-
-# Webcam / live feed
-results = model.predict(source=0, conf=0.5, show=True)
-
-# Print detections
-for r in results:
-    for box in r.boxes:
-        cls = model.names[int(box.cls)]
-        conf = float(box.conf)
-        print(f"Detected: {cls} ({conf:.2f})")
-```
-
-### Export to CSV
-
-```python
-import pandas as pd
-import glob, os
-
-image_paths = glob.glob("./dataset/test/images/*.jpg")
-records = []
-
-for img_path in image_paths:
-    results = model.predict(img_path, conf=0.5, verbose=False)
-    for r in results:
-        counts = {name: 0 for name in model.names.values()}
-        for box in r.boxes:
-            counts[model.names[int(box.cls)]] += 1
-        records.append({"image": os.path.basename(img_path),
-                        "total": len(r.boxes), **counts})
-
-pd.DataFrame(records).to_csv("predictions.csv", index=False)
-```
-
-### Export Model
-
-```python
-model.export(format="onnx")       # ONNX (cross-platform)
-model.export(format="tflite")     # TensorFlow Lite (mobile)
-model.export(format="openvino")   # Intel edge devices
 ```
 
 ---
