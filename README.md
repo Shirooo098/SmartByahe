@@ -1,6 +1,6 @@
 # SmartByahe 🚌
 
-A computer vision system for detecting and classifying bus passengers by demographic group using YOLOv2-6n object detection.
+A Proof of Concept (POC) using computer vision system for detecting and classifying bus passengers by demographic group through clay models using YOLOv26 object detection.
 
 ---
 
@@ -68,7 +68,7 @@ Evaluated on 28 validation images (334 instances):
 ## Installation
 
 ```bash
-pip install ultralytics
+pip install -r requirements.txt
 ```
 
 ---
