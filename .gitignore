@@ -1,0 +1,16 @@
+# Ignore the whole venv EXCEPT the model folder
+byaheenv/*
+!byaheenv/model/
+
+# Inside model/ - ignore large/generated files
+byaheenv/model/runs/
+byaheenv/model/dataset/
+byaheenv/model/*.pt
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+.env
