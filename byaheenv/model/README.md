@@ -76,25 +76,24 @@ pip install -r requirements.txt
 ## Project Structure
 
 ```
-SmartByahe/
-├── dataset/
-│   ├── train/
-│   │   ├── images/
-│   │   └── labels/
-│   ├── valid/
-│   │   ├── images/
-│   │   └── labels/
-│   └── test/
-│       ├── images/
-│       └── labels/
-├── data.yaml
-├── yolo26n.pt
-└── runs/
-    └── detect/
-        └── train13/
-            └── weights/
-                ├── best.pt
-                └── last.pt
+SMARTBYAHE/
+├── byaheenv/                   Virtual environment (gitignored)
+│   ├── Include/
+│   ├── Lib/
+│   ├── Scripts/
+│   └── pyvenv.cfg
+│
+├── model/                      ML work 
+│   ├── dataset/
+│   ├── runs/
+│   ├── main.ipynb
+│   ├── requirements.txt
+│   ├── yolo26n.pt
+│   └── yolov8n.pt
+│
+├── .env
+├── .gitignore
+└── README.md
 ```
 
 ---
