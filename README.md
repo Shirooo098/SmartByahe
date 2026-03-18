@@ -73,8 +73,9 @@ pip install -r requirements.txt
 
 ---
 
-## Project Structure
+## Current Project Structure
 
+The Flutter application and back-end server will be to follow.
 ```
 SMARTBYAHE/
 ├── byaheenv/                   Virtual environment (gitignored)
