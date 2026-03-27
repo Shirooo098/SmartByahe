@@ -1,11 +1,20 @@
 # Ignore the whole venv EXCEPT the model folder
 byaheenv/*
 !byaheenv/model/
+!byaheenv/backend/
 
 # Inside model/ - ignore large/generated files
-byaheenv/model/runs/
+byaheenv/model/*
+!byaheenv/model/main.ipynb
+!byaheenv/model/requirements.txt
 byaheenv/model/dataset/
 byaheenv/model/*.pt
+byaheenv/model/Bus_passenger-*/
+byaheenv/model/runs/        # ← add this
+
+# Ignore Include and Lib inside venv
+byaheenv/Include/           # ← add this
+byaheenv/Lib/               # ← add this
 
 # Notebook checkpoints
 .ipynb_checkpoints/
