@@ -1,8 +1,13 @@
 import cv2
 from ultralytics import solutions, YOLO
 from backend.app.state import latest_data 
+from pathlib import Path
 
-model_path = "../../camera_model.py"
+BASE_DIR = Path(__file__).resolve().parent
+model_path = str(BASE_DIR / "camera_model.pt")
+
+print(f"Loading model from: {model_path}")
+
 
 region_points = {
     "region-01": [(0, 20), (300, 20), (300, 250), (250, 400), (0, 400)],
