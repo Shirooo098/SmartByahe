@@ -5,8 +5,8 @@ from backend.app.state import latest_data
 model_path = "../../camera_model.py"
 
 region_points = {
-    "region-01": [(0, 20), (300, 20), (300, 400), (0, 400)],
-    "region-02": [(340, 20), (640, 20), (640, 400), (340, 400)],
+    "region-01": [(0, 20), (300, 20), (300, 250), (250, 400), (0, 400)],
+    "region-02": [(340, 250), (340, 20), (640, 20), (640, 400), (400, 400)],
 }
 
 def passenger_count_capture():
