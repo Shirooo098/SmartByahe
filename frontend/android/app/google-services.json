@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "162832384771",
+    "project_id": "smartbyahe",
+    "storage_bucket": "smartbyahe.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:162832384771:android:46322ee7e91c3048799f36",
+        "android_client_info": {
+          "package_name": "com.example.frontend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9sAATa_1uz3jbbngKtYUTTdtWyF1jn_c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
