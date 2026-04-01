@@ -1,16 +1,13 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
+import 'package:http/http.dart' as http;
 
 /// PassengerDetectionScreen
-/// Requires these packages in pubspec.yaml:
-///   camera: ^0.11.0+2
+/// Requires only this in pubspec.yaml:
+///   http: ^1.2.0
 ///
-/// Also add to AndroidManifest.xml:
-///   <uses-permission android:name="android.permission.CAMERA" />
-///
-/// And to Info.plist (iOS):
-///   <key>NSCameraUsageDescription</key>
-///   <string>Camera is needed to detect passengers.</string>
+/// No camera package needed — Python backend handles the camera.
 
 class PassengerDetectionScreen extends StatefulWidget {
   const PassengerDetectionScreen({super.key});
@@ -20,13 +17,18 @@ class PassengerDetectionScreen extends StatefulWidget {
       _PassengerDetectionScreenState();
 }
 
-class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
-  CameraController? _cameraController;
-  List<CameraDescription> _cameras = [];
-  bool _isCameraInitialized = false;
-  bool _isCameraError = false;
+class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
+    with SingleTickerProviderStateMixin {
+  // ── Polling ──────────────────────────────────────────────────────────────
+  final String _apiUrl = 'http://127.0.0.1:8000/counts';
+  Timer? _pollingTimer;
+  bool _isConnected = false;
 
-  // Passenger counts per class
+  // ── Animation (pulse for detection indicator) ─────────────────────────────
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
+  // ── Data ─────────────────────────────────────────────────────────────────
   final Map<String, int> _classCounts = {
     'Child Male': 0,
     'Adult Male': 0,
@@ -36,69 +38,80 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
     'Senior Female': 0,
   };
 
+  final Map<String, String> _labels = {
+    'Child Male': 'Child Male',
+    'Adult Male': 'Adult Male',
+    'Senior Male': 'Senior Male',
+    'Child Female': 'Child Female',
+    'Adult Female': 'Adult Female',
+    'Senior Female': 'Senior Female',
+  };
+
   int get _totalPassengers =>
       _classCounts.values.fold(0, (sum, count) => sum + count);
 
-  // Car model (placeholder — replace with your actual detection logic)
-  String _carModel = 'Toyota Innova Zenix';
+  final String _carModel = 'Toyota Innova Zenix';
 
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    _initCamera();
-  }
 
-  Future<void> _initCamera() async {
-    try {
-      _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        setState(() => _isCameraError = true);
-        return;
-      }
-      _cameraController = CameraController(
-        _cameras.first,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-      await _cameraController!.initialize();
-      if (mounted) {
-        setState(() => _isCameraInitialized = true);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isCameraError = true);
-      }
-    }
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+
+    _pulseAnimation = Tween<double>(begin: 0.4, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+
+    _startPolling();
   }
 
   @override
   void dispose() {
-    _cameraController?.dispose();
+    _pollingTimer?.cancel();
+    _pulseController.dispose();
     super.dispose();
   }
 
-  void _incrementClass(String className) {
-    setState(
-      () => _classCounts[className] = (_classCounts[className] ?? 0) + 1,
+  // ── Polling ───────────────────────────────────────────────────────────────
+  void _startPolling() {
+    _fetchCounts();
+    _pollingTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _fetchCounts(),
     );
   }
 
-  void _decrementClass(String className) {
-    setState(() {
-      if ((_classCounts[className] ?? 0) > 0) {
-        _classCounts[className] = _classCounts[className]! - 1;
+  Future<void> _fetchCounts() async {
+    try {
+      final response = await http
+          .get(Uri.parse(_apiUrl))
+          .timeout(const Duration(seconds: 3));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final classCounts = data['class_counts'] ?? {};
+        setState(() {
+          _isConnected = true;
+          _classCounts['Child Male'] = classCounts['Child Male'] ?? 0;
+          _classCounts['Adult Male'] = classCounts['Adult Male'] ?? 0;
+          _classCounts['Senior Male'] = classCounts['Senior Male'] ?? 0;
+          _classCounts['Child Female'] = classCounts['Child Female'] ?? 0;
+          _classCounts['Adult Female'] = classCounts['Adult Female'] ?? 0;
+          _classCounts['Senior Female'] = classCounts['Senior Female'] ?? 0;
+        });
+      } else {
+        setState(() => _isConnected = false);
       }
-    });
+    } catch (e) {
+      setState(() => _isConnected = false);
+    }
   }
 
-  void _resetAll() {
-    setState(() {
-      for (final key in _classCounts.keys) {
-        _classCounts[key] = 0;
-      }
-    });
-  }
-
+  // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -106,13 +119,8 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // ── FRAME 1: Car Model ──────────────────────────────────
             _buildCarModelFrame(),
-
-            // ── FRAME 2: Camera Feed ────────────────────────────────
-            Expanded(child: _buildCameraFrame()),
-
-            // ── FRAME 3: Stats + Class Table ───────────────────────
+            Expanded(child: _buildDetectionStatusFrame()),
             _buildStatsFrame(),
           ],
         ),
@@ -172,14 +180,22 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
               ],
             ),
           ),
-          // Status badge
+          // Connection badge
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: const Color(0xFF0FBF6A).withOpacity(0.12),
+              color:
+                  (_isConnected
+                          ? const Color(0xFF0FBF6A)
+                          : const Color(0xFFFF4444))
+                      .withOpacity(0.12),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: const Color(0xFF0FBF6A).withOpacity(0.3),
+                color:
+                    (_isConnected
+                            ? const Color(0xFF0FBF6A)
+                            : const Color(0xFFFF4444))
+                        .withOpacity(0.3),
               ),
             ),
             child: Row(
@@ -188,18 +204,22 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
                 Container(
                   width: 6,
                   height: 6,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF0FBF6A),
+                  decoration: BoxDecoration(
+                    color: _isConnected
+                        ? const Color(0xFF0FBF6A)
+                        : const Color(0xFFFF4444),
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 5),
-                const Text(
-                  'LIVE',
+                Text(
+                  _isConnected ? 'LIVE' : 'OFF',
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF0FBF6A),
+                    color: _isConnected
+                        ? const Color(0xFF0FBF6A)
+                        : const Color(0xFFFF4444),
                     letterSpacing: 1.2,
                   ),
                 ),
@@ -212,108 +232,128 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Frame 2 — Camera Feed
+  // Frame 2 — Detection Status (replaces camera)
   // ---------------------------------------------------------------------------
-  Widget _buildCameraFrame() {
+  Widget _buildDetectionStatusFrame() {
     return Container(
       width: double.infinity,
-      color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Camera preview or fallback
-          if (_isCameraInitialized && _cameraController != null)
-            CameraPreview(_cameraController!)
-          else if (_isCameraError)
-            _buildCameraError()
-          else
-            _buildCameraLoading(),
-
-          // Overlay: corner brackets (detection frame indicator)
-          Positioned.fill(child: _buildDetectionOverlay()),
-
-          // Overlay: label
-          Positioned(
-            top: 12,
-            left: 12,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.55),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.videocam, color: Colors.white, size: 14),
-                  SizedBox(width: 5),
-                  Text(
-                    'CAMERA FEED',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+      color: const Color(0xFF0D0F14),
+      child: _isConnected ? _buildActiveDetection() : _buildOfflineStatus(),
     );
   }
 
-  Widget _buildCameraLoading() {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          CircularProgressIndicator(color: Color(0xFF4D8BFF)),
-          SizedBox(height: 12),
-          Text(
-            'Initializing camera…',
-            style: TextStyle(color: Color(0xFF5A6275), fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCameraError() {
+  Widget _buildActiveDetection() {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
-            Icons.no_photography_rounded,
-            color: Color(0xFF5A6275),
-            size: 48,
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Camera unavailable',
-            style: TextStyle(color: Color(0xFFE8EAF0), fontSize: 14),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Check camera permissions in settings.',
-            style: TextStyle(color: Color(0xFF5A6275), fontSize: 12),
-          ),
-          const SizedBox(height: 16),
-          TextButton.icon(
-            onPressed: () {
-              setState(() {
-                _isCameraError = false;
-                _isCameraInitialized = false;
-              });
-              _initCamera();
+          // Pulsing radar animation
+          AnimatedBuilder(
+            animation: _pulseAnimation,
+            builder: (context, child) {
+              return Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Outer ring
+                  Container(
+                    width: 140 * _pulseAnimation.value,
+                    height: 140 * _pulseAnimation.value,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(
+                          0xFF0FBF6A,
+                        ).withOpacity(0.15 * _pulseAnimation.value),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                  // Middle ring
+                  Container(
+                    width: 100 * _pulseAnimation.value,
+                    height: 100 * _pulseAnimation.value,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(
+                          0xFF0FBF6A,
+                        ).withOpacity(0.25 * _pulseAnimation.value),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                  // Core
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF0FBF6A).withOpacity(0.1),
+                      border: Border.all(
+                        color: const Color(0xFF0FBF6A).withOpacity(0.6),
+                        width: 2,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.sensors_rounded,
+                      color: Color(0xFF0FBF6A),
+                      size: 28,
+                    ),
+                  ),
+                ],
+              );
             },
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('Retry'),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF4D8BFF),
+          ),
+
+          const SizedBox(height: 24),
+
+          const Text(
+            'DETECTION ACTIVE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2.5,
+              color: Color(0xFF0FBF6A),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Python model is running • Camera feed on server',
+            style: TextStyle(fontSize: 12, color: const Color(0xFF5A6275)),
+          ),
+
+          const SizedBox(height: 28),
+
+          // Total passenger big display
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF161A23),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF2A2F3D)),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'PASSENGERS DETECTED',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.8,
+                    color: Color(0xFF5A6275),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '$_totalPassengers',
+                  style: const TextStyle(
+                    fontSize: 56,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF4D8BFF),
+                    height: 1,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -321,8 +361,55 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
     );
   }
 
-  Widget _buildDetectionOverlay() {
-    return CustomPaint(painter: _CornerBracketPainter());
+  Widget _buildOfflineStatus() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFFFF4444).withOpacity(0.1),
+              border: Border.all(
+                color: const Color(0xFFFF4444).withOpacity(0.4),
+                width: 2,
+              ),
+            ),
+            child: const Icon(
+              Icons.sensors_off_rounded,
+              color: Color(0xFFFF6B6B),
+              size: 28,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'SERVER OFFLINE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2.5,
+              color: Color(0xFFFF6B6B),
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Make sure your FastAPI server is running',
+            style: TextStyle(fontSize: 12, color: Color(0xFF5A6275)),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'uvicorn backend.app.main:app --reload',
+            style: TextStyle(
+              fontSize: 11,
+              color: Color(0xFF3D4558),
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -336,116 +423,45 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
       ),
       child: Column(
         children: [
-          // Total count banner
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: Color(0xFF2A2F3D), width: 1),
-              ),
-            ),
+          // Table header row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
             child: Row(
-              children: [
-                const Icon(
-                  Icons.groups_rounded,
-                  color: Color(0xFF4D8BFF),
-                  size: 22,
-                ),
-                const SizedBox(width: 10),
-                const Text(
-                  'TOTAL PASSENGERS',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.5,
-                    color: Color(0xFF5A6275),
-                  ),
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E5CF6).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: const Color(0xFF4D8BFF).withOpacity(0.4),
-                    ),
-                  ),
+              children: const [
+                Expanded(
                   child: Text(
-                    '$_totalPassengers',
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF4D8BFF),
+                    'CLASS',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.6,
+                      color: Color(0xFF3D4558),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: _resetAll,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF4444).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: const Color(0xFFFF4444).withOpacity(0.25),
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.restart_alt_rounded,
-                      color: Color(0xFFFF6B6B),
-                      size: 16,
-                    ),
+                Text(
+                  'COUNT',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.6,
+                    color: Color(0xFF3D4558),
                   ),
                 ),
               ],
             ),
           ),
 
-          // Class table
+          // Class rows
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Column(
-              children: [
-                // Table header
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    children: const [
-                      Expanded(
-                        child: Text(
-                          'CLASS',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.6,
-                            color: Color(0xFF3D4558),
-                          ),
-                        ),
-                      ),
-                      Text(
-                        'COUNT',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.6,
-                          color: Color(0xFF3D4558),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Table rows
-                ..._classCounts.entries.map(
-                  (entry) => _buildClassRow(entry.key, entry.value),
-                ),
-              ],
+              children: _classCounts.entries.map((entry) {
+                return _buildClassRow(
+                  _labels[entry.key] ?? entry.key,
+                  entry.value,
+                );
+              }).toList(),
             ),
           ),
         ],
@@ -481,110 +497,24 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen> {
           Expanded(
             child: Text(
               className,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
-                color: const Color(0xFFB8BFCC),
+                color: Color(0xFFB8BFCC),
                 letterSpacing: 0.2,
               ),
             ),
           ),
-          // Decrement
-          GestureDetector(
-            onTap: () => _decrementClass(className),
-            child: Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: accentColor.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Icon(Icons.remove, color: accentColor, size: 14),
-            ),
-          ),
-          // Count
-          SizedBox(
-            width: 36,
-            child: Text(
-              '$count',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: count > 0 ? accentColor : const Color(0xFF3D4558),
-              ),
-            ),
-          ),
-          // Increment
-          GestureDetector(
-            onTap: () => _incrementClass(className),
-            child: Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: accentColor.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Icon(Icons.add, color: accentColor, size: 14),
+          Text(
+            '$count',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: count > 0 ? accentColor : const Color(0xFF3D4558),
             ),
           ),
         ],
       ),
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Custom painter: corner bracket overlay for camera detection frame
-// ---------------------------------------------------------------------------
-class _CornerBracketPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF4D8BFF).withOpacity(0.8)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round;
-
-    const margin = 20.0;
-    const len = 22.0;
-
-    final corners = [
-      // Top-left
-      [
-        Offset(margin, margin + len),
-        Offset(margin, margin),
-        Offset(margin + len, margin),
-      ],
-      // Top-right
-      [
-        Offset(size.width - margin - len, margin),
-        Offset(size.width - margin, margin),
-        Offset(size.width - margin, margin + len),
-      ],
-      // Bottom-left
-      [
-        Offset(margin, size.height - margin - len),
-        Offset(margin, size.height - margin),
-        Offset(margin + len, size.height - margin),
-      ],
-      // Bottom-right
-      [
-        Offset(size.width - margin - len, size.height - margin),
-        Offset(size.width - margin, size.height - margin),
-        Offset(size.width - margin, size.height - margin - len),
-      ],
-    ];
-
-    for (final pts in corners) {
-      final path = Path()
-        ..moveTo(pts[0].dx, pts[0].dy)
-        ..lineTo(pts[1].dx, pts[1].dy)
-        ..lineTo(pts[2].dx, pts[2].dy);
-      canvas.drawPath(path, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
