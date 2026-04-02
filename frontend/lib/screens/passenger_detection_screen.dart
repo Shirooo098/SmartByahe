@@ -1,13 +1,10 @@
-import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// PassengerDetectionScreen
-/// Requires only this in pubspec.yaml:
-///   http: ^1.2.0
-///
-/// No camera package needed — Python backend handles the camera.
+/// Requires in pubspec.yaml:
+///   web_socket_channel: ^2.4.0
 
 class PassengerDetectionScreen extends StatefulWidget {
   const PassengerDetectionScreen({super.key});
@@ -19,9 +16,9 @@ class PassengerDetectionScreen extends StatefulWidget {
 
 class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     with SingleTickerProviderStateMixin {
-  // ── Polling ──────────────────────────────────────────────────────────────
-  final String _apiUrl = 'http://127.0.0.1:8000/counts';
-  Timer? _pollingTimer;
+  // ── WebSocket ─────────────────────────────────────────────────────────────
+  static const String _wsUrl = 'ws://127.0.0.1:8000/websocket/counts';
+  WebSocketChannel? _channel;
   bool _isConnected = false;
 
   // ── Animation (pulse for detection indicator) ─────────────────────────────
@@ -36,15 +33,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     'Child Female': 0,
     'Adult Female': 0,
     'Senior Female': 0,
-  };
-
-  final Map<String, String> _labels = {
-    'Child Male': 'Child Male',
-    'Adult Male': 'Adult Male',
-    'Senior Male': 'Senior Male',
-    'Child Female': 'Child Female',
-    'Adult Female': 'Adult Female',
-    'Senior Female': 'Senior Female',
   };
 
   int get _totalPassengers =>
@@ -66,49 +54,56 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _startPolling();
+    _connectWebSocket();
   }
 
   @override
   void dispose() {
-    _pollingTimer?.cancel();
+    _channel?.sink.close();
     _pulseController.dispose();
     super.dispose();
   }
 
-  // ── Polling ───────────────────────────────────────────────────────────────
-  void _startPolling() {
-    _fetchCounts();
-    _pollingTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _fetchCounts(),
-    );
-  }
-
-  Future<void> _fetchCounts() async {
+  // ── WebSocket ─────────────────────────────────────────────────────────────
+  void _connectWebSocket() {
     try {
-      final response = await http
-          .get(Uri.parse(_apiUrl))
-          .timeout(const Duration(seconds: 3));
+      _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final classCounts = data['class_counts'] ?? {};
-        setState(() {
-          _isConnected = true;
-          _classCounts['Child Male'] = classCounts['Child Male'] ?? 0;
-          _classCounts['Adult Male'] = classCounts['Adult Male'] ?? 0;
-          _classCounts['Senior Male'] = classCounts['Senior Male'] ?? 0;
-          _classCounts['Child Female'] = classCounts['Child Female'] ?? 0;
-          _classCounts['Adult Female'] = classCounts['Adult Female'] ?? 0;
-          _classCounts['Senior Female'] = classCounts['Senior Female'] ?? 0;
-        });
-      } else {
-        setState(() => _isConnected = false);
-      }
+      setState(() => _isConnected = true);
+
+      _channel!.stream.listen(
+        (message) {
+          final data = jsonDecode(message);
+          final classCounts = data['class_counts'] ?? {};
+          setState(() {
+            _isConnected = true;
+            _classCounts['Child Male'] = classCounts['Child Male'] ?? 0;
+            _classCounts['Adult Male'] = classCounts['Adult Male'] ?? 0;
+            _classCounts['Senior Male'] = classCounts['Senior Male'] ?? 0;
+            _classCounts['Child Female'] = classCounts['Child Female'] ?? 0;
+            _classCounts['Adult Female'] = classCounts['Adult Female'] ?? 0;
+            _classCounts['Senior Female'] = classCounts['Senior Female'] ?? 0;
+          });
+        },
+        onError: (error) {
+          setState(() => _isConnected = false);
+          _retryConnection();
+        },
+        onDone: () {
+          setState(() => _isConnected = false);
+          _retryConnection();
+        },
+      );
     } catch (e) {
       setState(() => _isConnected = false);
+      _retryConnection();
     }
+  }
+
+  void _retryConnection() {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) _connectWebSocket();
+    });
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -232,7 +227,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
   }
 
   // ---------------------------------------------------------------------------
-  // Frame 2 — Detection Status (replaces camera)
+  // Frame 2 — Detection Status
   // ---------------------------------------------------------------------------
   Widget _buildDetectionStatusFrame() {
     return Container(
@@ -247,14 +242,12 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Pulsing radar animation
           AnimatedBuilder(
             animation: _pulseAnimation,
             builder: (context, child) {
               return Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Outer ring
                   Container(
                     width: 140 * _pulseAnimation.value,
                     height: 140 * _pulseAnimation.value,
@@ -268,7 +261,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                       ),
                     ),
                   ),
-                  // Middle ring
                   Container(
                     width: 100 * _pulseAnimation.value,
                     height: 100 * _pulseAnimation.value,
@@ -282,7 +274,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                       ),
                     ),
                   ),
-                  // Core
                   Container(
                     width: 64,
                     height: 64,
@@ -304,9 +295,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
               );
             },
           ),
-
           const SizedBox(height: 24),
-
           const Text(
             'DETECTION ACTIVE',
             style: TextStyle(
@@ -317,14 +306,11 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
             ),
           ),
           const SizedBox(height: 6),
-          Text(
+          const Text(
             'Python model is running • Camera feed on server',
-            style: TextStyle(fontSize: 12, color: const Color(0xFF5A6275)),
+            style: TextStyle(fontSize: 12, color: Color(0xFF5A6275)),
           ),
-
           const SizedBox(height: 28),
-
-          // Total passenger big display
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
             decoration: BoxDecoration(
@@ -407,6 +393,15 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
               fontFamily: 'monospace',
             ),
           ),
+          const SizedBox(height: 16),
+          const Text(
+            'Retrying connection...',
+            style: TextStyle(
+              fontSize: 11,
+              color: Color(0xFF5A6275),
+              fontStyle: FontStyle.italic,
+            ),
+          ),
         ],
       ),
     );
@@ -423,7 +418,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
       ),
       child: Column(
         children: [
-          // Table header row
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
             child: Row(
@@ -451,16 +445,11 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
               ],
             ),
           ),
-
-          // Class rows
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Column(
               children: _classCounts.entries.map((entry) {
-                return _buildClassRow(
-                  _labels[entry.key] ?? entry.key,
-                  entry.value,
-                );
+                return _buildClassRow(entry.key, entry.value);
               }).toList(),
             ),
           ),
