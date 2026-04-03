@@ -49,6 +49,7 @@ dependencies:
   firebase_core: ^4.6.0
   web_socket: ^1.0.1
   web_socket_channel: ^3.0.3
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:
@@ -68,6 +69,7 @@ dev_dependencies:
 flutter:
   assets:
     - assets/images/smart_byahe_logo.png
+    - assets/images/nobglogo.png
 
   uses-material-design: true
 
