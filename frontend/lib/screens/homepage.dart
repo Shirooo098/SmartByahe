@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
+import 'location_picker.dart';
 
 class Homepage extends StatefulWidget {
   const Homepage({super.key});
@@ -12,16 +14,16 @@ void handleLogout(BuildContext context) {
 }
 
 class _HomepageState extends State<Homepage> {
-  int _selectedIndex = 0; // 0 = Home (active), 1 = Settings
+  int _selectedIndex = 0;
 
-  // Brand Colors
   static const Color navyBlue = Color(0xFF1B3A6B);
   static const Color yellow = Color(0xFFFFCC00);
   static const Color routeBlue = Color(0xFF4A90D9);
   static const Color darkText = Color(0xFF1E2A3B);
-  static const Color lightGray = Color(0xFFF5F6FA);
 
-  // Dummy route data
+  String _currentLocationLabel = 'My Current Location';
+  LatLng? _currentLatLng;
+
   final List<Map<String, String>> _routes = [
     {
       'code': 'B001',
@@ -29,6 +31,22 @@ class _HomepageState extends State<Homepage> {
       'distance': '421m away',
     },
   ];
+
+  Future<void> _openLocationPicker() async {
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (_) => const LocationPickerScreen()),
+    );
+
+    if (result != null) {
+      setState(() {
+        _currentLatLng = result['latLng'] as LatLng;
+        final fullAddress = result['address'] as String;
+        final parts = fullAddress.split(',');
+        _currentLocationLabel = parts.take(2).join(',').trim();
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,7 +102,6 @@ class _HomepageState extends State<Homepage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Route Title
           const Center(
             child: Text(
               'Route',
@@ -95,15 +112,9 @@ class _HomepageState extends State<Homepage> {
               ),
             ),
           ),
-
           const SizedBox(height: 16),
-
-          // Location Card
           _buildLocationCard(),
-
           const SizedBox(height: 28),
-
-          // Biyahe Routes
           const Text(
             'Biyahe Routes',
             style: TextStyle(
@@ -113,10 +124,7 @@ class _HomepageState extends State<Homepage> {
               fontFamily: 'monospace',
             ),
           ),
-
           const SizedBox(height: 12),
-
-          // Route List
           ...(_routes.map(
             (route) => _buildRouteCard(
               code: route['code']!,
@@ -146,7 +154,7 @@ class _HomepageState extends State<Homepage> {
       ),
       child: Row(
         children: [
-          // Icon column with dotted line
+          // Icon column
           Column(
             children: [
               Container(
@@ -157,7 +165,6 @@ class _HomepageState extends State<Homepage> {
                   border: Border.all(color: Colors.orange, width: 2.5),
                 ),
               ),
-              // Dotted line
               SizedBox(
                 height: 32,
                 child: CustomPaint(
@@ -171,30 +178,50 @@ class _HomepageState extends State<Homepage> {
 
           const SizedBox(width: 14),
 
-          // Labels
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
-              Text(
-                'My Current Location',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'monospace',
-                  color: darkText,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Tappable Current Location row ──────────────────────────
+                GestureDetector(
+                  onTap: _openLocationPicker,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _currentLocationLabel,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            fontFamily: 'monospace',
+                            color: darkText,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(
+                        Icons.edit_location_alt_outlined,
+                        size: 16,
+                        color: Colors.orange,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              SizedBox(height: 24),
-              Text(
-                'Destination',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'monospace',
-                  color: darkText,
+
+                const SizedBox(height: 24),
+
+                const Text(
+                  'Destination',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    fontFamily: 'monospace',
+                    color: darkText,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -223,7 +250,6 @@ class _HomepageState extends State<Homepage> {
       ),
       child: Row(
         children: [
-          // Route Code Badge
           Container(
             width: 44,
             height: 44,
@@ -243,10 +269,7 @@ class _HomepageState extends State<Homepage> {
               ),
             ),
           ),
-
           const SizedBox(width: 12),
-
-          // Route Name & Distance
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -273,8 +296,6 @@ class _HomepageState extends State<Homepage> {
               ],
             ),
           ),
-
-          // Passenger Count
           Text(
             count,
             style: const TextStyle(
@@ -304,7 +325,6 @@ class _HomepageState extends State<Homepage> {
       decoration: const BoxDecoration(color: navyBlue),
       child: Row(
         children: [
-          // Home Tab
           Expanded(
             child: GestureDetector(
               onTap: () => setState(() => _selectedIndex = 0),
@@ -332,8 +352,6 @@ class _HomepageState extends State<Homepage> {
               ),
             ),
           ),
-
-          // Settings Tab
           Expanded(
             child: GestureDetector(
               onTap: () => setState(() => _selectedIndex = 1),
@@ -367,18 +385,15 @@ class _HomepageState extends State<Homepage> {
   }
 }
 
-// Dotted line painter for the location card
 class _DottedLinePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = Colors.grey.shade400
       ..strokeWidth = 1.5;
-
     const dashHeight = 4.0;
     const dashSpace = 3.0;
     double startY = 0;
-
     while (startY < size.height) {
       canvas.drawLine(
         Offset(size.width / 2, startY),
