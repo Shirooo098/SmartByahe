@@ -1,4 +1,5 @@
 import cv2
+import base64
 from ultralytics import solutions, YOLO
 from backend.app.state import latest_data 
 from pathlib import Path
@@ -38,6 +39,16 @@ def passenger_count_capture():
             cls_name = yolo_results[0].names[int(box.cls)]
             class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
 
+                # Get annotated frame with regions drawn
+        annotated_frame = results.plot() if hasattr(results, 'plot') else im0
+
+        # Encode frame to base64
+        _, buffer = cv2.imencode('.jpg', annotated_frame,
+                                 [cv2.IMWRITE_JPEG_QUALITY, 70])
+        frame_b64 = base64.b64encode(buffer).decode('utf-8')
+
+        # Update state
         latest_data["region_counts"] = results.region_counts
         latest_data["class_counts"] = class_counts
         latest_data["total_passenger_counts"] = sum(class_counts.values())
+        latest_data["frame"] = frame_b64  # ← add frame to state
