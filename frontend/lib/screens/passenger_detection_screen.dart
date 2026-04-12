@@ -2,9 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-/// PassengerDetectionScreen
-/// Requires in pubspec.yaml:
-///   web_socket_channel: ^2.4.0
+
 
 class PassengerDetectionScreen extends StatefulWidget {
   const PassengerDetectionScreen({super.key});
@@ -16,16 +14,13 @@ class PassengerDetectionScreen extends StatefulWidget {
 
 class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     with SingleTickerProviderStateMixin {
-  // ── WebSocket ─────────────────────────────────────────────────────────────
   static const String _wsUrl = 'ws://127.0.0.1:8000/websocket/counts';
   WebSocketChannel? _channel;
   bool _isConnected = false;
 
-  // ── Animation (pulse for detection indicator) ─────────────────────────────
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
-  // ── Data ─────────────────────────────────────────────────────────────────
   final Map<String, int> _classCounts = {
     'Child Male': 0,
     'Adult Male': 0,
@@ -40,7 +35,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
 
   final String _carModel = 'Toyota Innova Zenix';
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
@@ -64,7 +58,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     super.dispose();
   }
 
-  // ── WebSocket ─────────────────────────────────────────────────────────────
   void _connectWebSocket() {
     try {
       _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
@@ -106,7 +99,6 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     });
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
