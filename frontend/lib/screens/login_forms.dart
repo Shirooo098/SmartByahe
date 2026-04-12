@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class LoginFormScreen extends StatefulWidget {
-  const LoginFormScreen({super.key});
+  const LoginFormScreen({super.key, required this.role});
+  final String role;
 
   @override
   State<LoginFormScreen> createState() => _LoginFormScreenState();
@@ -34,15 +36,43 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
   // ─── Firebase Email/Password Sign In ───────────────────────────────────────
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() => _isLoading = true);
 
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      // Step 1: Sign in with Firebase Auth
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-      if (mounted) context.go('/');
+
+      // Step 2: Fetch their Firestore doc
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(credential.user!.uid)
+          .get();
+
+      if (!doc.exists) {
+        await FirebaseAuth.instance.signOut();
+        if (mounted)
+          _showError('Account data not found. Please register again.');
+        return;
+      }
+
+      final savedRole = doc.data()?['role'] as String?;
+
+      // Step 3: Check role matches
+      if (savedRole != widget.role) {
+        await FirebaseAuth.instance.signOut();
+        if (mounted)
+          _showError(
+            'This account is registered as a $savedRole. '
+            'Please go back and select ${_capitalize(savedRole ?? 'the correct role')}.',
+          );
+        return;
+      }
+
+      // Step 4: All good — navigate to correct home
+      if (mounted) context.go('/${widget.role}-home');
     } on FirebaseAuthException catch (e) {
       if (mounted) _showError(_friendlyError(e.code));
     } catch (e) {
@@ -52,6 +82,7 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
     }
   }
 
+  String _capitalize(String text) => text[0].toUpperCase() + text.substring(1);
   // ─── Forgot Password ────────────────────────────────────────────────────────
   Future<void> _handleForgotPassword() async {
     final email = _emailController.text.trim();
@@ -324,15 +355,11 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
                   // Sign Up CTA
                   Center(
                     child: GestureDetector(
-                      onTap: () => context.push('/register'),
-                      child: const Text(
-                        "Don't have an account? Register",
-                        style: TextStyle(
-                          color: Color(0xFFFCCD32),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                      onTap: () => context.push(
+                        '/register',
+                        extra: widget.role,
+                      ), // ✅ pass role
+                      child: const Text("Don't have an account? Register"),
                     ),
                   ),
 

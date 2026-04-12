@@ -6,6 +6,9 @@ import 'screens/landing_page.dart';
 import 'screens/login_forms.dart';
 import 'screens/register_forms.dart';
 import 'screens/homepage.dart';
+import 'screens/driver_homepage.dart';
+import 'screens/passenger_homepage.dart';
+import 'screens/passenger_detection_screen.dart';
 import 'auth_layout.dart';
 
 void main() async {
@@ -20,16 +23,37 @@ final GoRouter _router = GoRouter(
     GoRoute(path: '/', builder: (context, state) => const AuthLayout()),
     GoRoute(
       path: '/login-form',
-      builder: (context, state) => const LoginFormScreen(),
+      builder: (context, state) {
+        final role = state.extra as String? ?? 'passenger';
+        return LoginFormScreen(role: role);
+      },
     ),
     GoRoute(path: '/HomePage', builder: (context, state) => const Homepage()),
     GoRoute(
-      path: '/register',
-      builder: (context, state) => const RegisterScreen(),
+      path: '/driver-home',
+      builder: (context, state) => const DriverHomepage(),
     ),
     GoRoute(
-      path: '/login-page',
-      builder: (context, state) => const LandingPage(),
+      path: '/passenger-home',
+      builder: (context, state) => const PassengerHomepage(),
+    ),
+    GoRoute(
+      path: '/passenger-detection',
+      builder: (context, state) => const PassengerDetectionScreen(),
+    ),
+    GoRoute(
+      path: '/register',
+      builder: (context, state) {
+        final role = state.extra as String? ?? 'passenger';
+        return RegisterScreen(role: role);
+      },
+    ),
+    GoRoute(
+      path: '/landing',
+      builder: (context, state) {
+        final role = state.extra as String? ?? 'passenger';
+        return LandingPage(role: role);
+      },
     ),
   ],
 );

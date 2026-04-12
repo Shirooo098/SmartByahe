@@ -2,12 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 class LandingPage extends StatelessWidget {
-  const LandingPage({super.key});
+  final String role; // 'driver' or 'passenger'
+
+  const LandingPage({super.key, required this.role});
 
   @override
   Widget build(BuildContext context) {
+    final isDriver = role == 'driver';
+    final roleLabel = isDriver ? 'Driver' : 'Passenger';
+
     return Scaffold(
       backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black87),
+          onPressed: () => context.pop(),
+        ),
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32.0),
@@ -15,7 +28,6 @@ class LandingPage extends StatelessWidget {
             children: [
               const Spacer(flex: 2),
 
-              // App Icon
               Container(
                 width: 200,
                 height: 200,
@@ -37,7 +49,6 @@ class LandingPage extends StatelessWidget {
 
               const SizedBox(height: 24),
 
-              // Tagline
               const Text(
                 'The Future of the Filipino Journey.',
                 textAlign: TextAlign.center,
@@ -48,13 +59,26 @@ class LandingPage extends StatelessWidget {
                 ),
               ),
 
+              const SizedBox(height: 8),
+
+              // ✅ Dynamic role label
+              Text(
+                '$roleLabel Login Page',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Colors.black45,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+
               const Spacer(flex: 3),
 
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () => context.push('/login-form'),
+                  onPressed: () => context.push('/login-form', extra: role),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1B3A6B),
                     foregroundColor: Colors.white,
@@ -75,14 +99,11 @@ class LandingPage extends StatelessWidget {
 
               const SizedBox(height: 12),
 
-              // Register Button
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: OutlinedButton(
-                  onPressed: () {
-                    context.push('/register');
-                  },
+                  onPressed: () => context.push('/register', extra: role),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.black87,
                     side: const BorderSide(color: Colors.black38),
@@ -97,9 +118,8 @@ class LandingPage extends StatelessWidget {
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 12),
 
-              // Terms text
               const Text(
                 'By signing in or registering, you agree to the terms\nof service and privacy policy.',
                 textAlign: TextAlign.center,
