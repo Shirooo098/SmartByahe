@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:frontend/screens/role_selection.dart';
-import 'screens/homepage.dart';
+// import 'screens/homepage.dart';
 
 // import 'screens/landing_page.dart';
 // import 'screens/passenger_detection_screen.dart';
@@ -22,9 +22,9 @@ class AuthLayout extends StatelessWidget {
         }
 
         // User is logged in → go to Homepage
-        if (snapshot.hasData && snapshot.data != null) {
-          return const Homepage();
-        }
+        // if (snapshot.hasData && snapshot.data != null) {
+        //   return const Homepage();
+        // }
 
         // Not authenticated → go to WelcomePage
         return const RoleSelectionPage();

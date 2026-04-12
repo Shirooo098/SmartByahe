@@ -100,10 +100,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
-  void _handleGoogleRegister() {
-    // TODO: Implement Google Sign-In
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -346,9 +342,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                       const SizedBox(height: 28),
 
-                      // Google Button
-                      Center(child: _buildGoogleButton()),
-
                       const SizedBox(height: 32),
                     ],
                   ),
@@ -469,40 +462,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildGoogleButton() {
-    return GestureDetector(
-      onTap: _handleGoogleRegister,
-      child: Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade200, width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Center(
-          child: Image.network(
-            'https://www.google.com/favicon.ico',
-            width: 28,
-            height: 28,
-            errorBuilder: (context, error, stackTrace) => const Icon(
-              Icons.g_mobiledata_rounded,
-              size: 32,
-              color: Color(0xFF4285F4),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

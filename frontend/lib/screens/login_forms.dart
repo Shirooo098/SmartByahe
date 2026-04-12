@@ -330,9 +330,6 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
 
                   const SizedBox(height: 28),
 
-                  // Google Button (static — TODO: add logic later)
-                  Center(child: _buildGoogleButton()),
-
                   const SizedBox(height: 28),
 
                   // Terms & Privacy
@@ -439,38 +436,6 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: Colors.redAccent, width: 2),
-        ),
-      ),
-    );
-  }
-
-  // Static Google button — TODO: wire up logic later
-  Widget _buildGoogleButton() {
-    return Container(
-      width: 64,
-      height: 64,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.grey.shade200, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Center(
-        child: Image.network(
-          'https://www.google.com/favicon.ico',
-          width: 28,
-          height: 28,
-          errorBuilder: (context, error, stackTrace) => const Icon(
-            Icons.g_mobiledata_rounded,
-            size: 32,
-            color: Color(0xFF4285F4),
-          ),
         ),
       ),
     );

@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:go_router/go_router.dart';
 
 class PassengerHomepage extends StatefulWidget {
   const PassengerHomepage({super.key});
@@ -10,197 +10,221 @@ class PassengerHomepage extends StatefulWidget {
 }
 
 class _PassengerHomepageState extends State<PassengerHomepage> {
-  static const String _espWsUrl = 'ws://172.20.10.5:81';
-  // Replace with your backend machine IP when running on phone.
-  static const String _backendWsUrl = 'ws://192.168.56.1:8000/websocket/counts';
-  WebSocketChannel? _espChannel;
-  WebSocketChannel? _backendChannel;
-  bool _isEspConnected = false;
-  bool _isBackendConnected = false;
-  int _passengerCount = 0;
-  double _latitude = 0.0;
-  double _longitude = 0.0;
-  bool _gpsValid = false;
+  static const Color navyBlue = Color(0xFF1B3A6B);
+  static const Color yellow = Color(0xFFFFCC00);
+  static const Color darkText = Color(0xFF1E2A3B);
 
-  @override
-  void initState() {
-    super.initState();
-    _connectEspWebSocket();
-    _connectBackendWebSocket();
-  }
+  int _selectedIndex = 0;
 
-  @override
-  void dispose() {
-    _espChannel?.sink.close();
-    _backendChannel?.sink.close();
-    super.dispose();
-  }
+  // ─── Logout ──────────────────────────────────────────────────────────────────
 
-  void _connectEspWebSocket() {
-    try {
-      _espChannel = WebSocketChannel.connect(Uri.parse(_espWsUrl));
-      _espChannel!.stream.listen(
-        (message) {
-          final data = jsonDecode(message.toString());
-          if (data is! Map<String, dynamic>) return;
-          final type = data['type'];
-          if (type != 'telemetry' && type != 'status') return;
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log Out', style: TextStyle(fontFamily: 'monospace')),
+        content: const Text('Are you sure you want to log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Log Out',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
 
-          final rawLat = data['latitude'];
-          final rawLng = data['longitude'];
-          final rawGpsValid = data['gps_valid'];
-
-          if (!mounted) return;
-          setState(() {
-            _isEspConnected = true;
-            _latitude = rawLat is num ? rawLat.toDouble() : double.tryParse('$rawLat') ?? 0.0;
-            _longitude = rawLng is num ? rawLng.toDouble() : double.tryParse('$rawLng') ?? 0.0;
-            _gpsValid = rawGpsValid == true;
-          });
-        },
-        onError: (_) {
-          if (!mounted) return;
-          setState(() => _isEspConnected = false);
-        },
-        onDone: () {
-          if (!mounted) return;
-          setState(() => _isEspConnected = false);
-        },
-      );
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _isEspConnected = false);
+    if (confirmed == true) {
+      await FirebaseAuth.instance.signOut();
+      if (mounted) context.go('/');
     }
   }
 
-  void _connectBackendWebSocket() {
-    try {
-      _backendChannel = WebSocketChannel.connect(Uri.parse(_backendWsUrl));
-      _backendChannel!.stream.listen(
-        (message) {
-          final data = jsonDecode(message.toString());
-          if (data is! Map<String, dynamic>) return;
-          final rawTotal = data['total_passenger_counts'];
-
-          if (!mounted) return;
-          setState(() {
-            _isBackendConnected = true;
-            _passengerCount = rawTotal is int ? rawTotal : int.tryParse('$rawTotal') ?? 0;
-          });
-        },
-        onError: (_) {
-          if (!mounted) return;
-          setState(() => _isBackendConnected = false);
-          _retryBackendConnection();
-        },
-        onDone: () {
-          if (!mounted) return;
-          setState(() => _isBackendConnected = false);
-          _retryBackendConnection();
-        },
-      );
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _isBackendConnected = false);
-      _retryBackendConnection();
-    }
-  }
-
-  void _retryBackendConnection() {
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) _connectBackendWebSocket();
-    });
-  }
+  // ─── Build ───────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFEEEEEE),
       appBar: AppBar(
-        title: const Text('Passenger Home'),
-        backgroundColor: const Color(0xFF1B3A6B),
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+        backgroundColor: navyBlue,
+        elevation: 0,
+        titleSpacing: 0,
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE2E5EC)),
+                borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.circle,
-                    size: 10,
-                    color: (_isEspConnected && _isBackendConnected)
-                        ? const Color(0xFF0FBF6A)
-                        : const Color(0xFFFF6B6B),
-                  ),
-                  const SizedBox(width: 8),
-                  Text((_isEspConnected && _isBackendConnected) ? 'LIVE DATA' : 'OFFLINE'),
-                ],
+              padding: const EdgeInsets.all(4),
+              child: Image.asset(
+                'assets/images/nobglogo.png',
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) =>
+                    const Icon(Icons.directions_bus, color: navyBlue, size: 30),
               ),
             ),
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
+            const SizedBox(width: 10),
+            const Text(
+              'Smart-Biyahe',
+              style: TextStyle(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE2E5EC)),
-              ),
-              child: Column(
-                children: [
-                  const Text('PASSENGER COUNT', style: TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  Text(
-                    '$_passengerCount',
-                    style: const TextStyle(fontSize: 42, fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _isBackendConnected ? 'Source: backend live' : 'Source: backend offline',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF70798A)),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE2E5EC)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('GPS TRACKER', style: TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  Text(_gpsValid
-                      ? 'Lat: ${_latitude.toStringAsFixed(6)}'
-                      : 'Lat: waiting for fix...'),
-                  const SizedBox(height: 4),
-                  Text(_gpsValid
-                      ? 'Lng: ${_longitude.toStringAsFixed(6)}'
-                      : 'Lng: waiting for fix...'),
-                  const SizedBox(height: 4),
-                  Text(
-                    _isEspConnected ? 'Source: ESP32 live' : 'Source: ESP32 offline',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF70798A)),
-                  ),
-                ],
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'monospace',
               ),
             ),
           ],
+        ),
+      ),
+      body: _selectedIndex == 0 ? _buildHome() : _buildSettings(),
+      bottomNavigationBar: _buildBottomNav(),
+    );
+  }
+
+  // ─── Home ────────────────────────────────────────────────────────────────────
+
+  Widget _buildHome() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'PASSENGER_SIDE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+              color: Color(0xFF70798A),
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 16),
+          _card(
+            child: const Center(
+              child: Text(
+                'Welcome, Passenger!',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'monospace',
+                  color: darkText,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Settings ────────────────────────────────────────────────────────────────
+
+  Widget _buildSettings() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Settings',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'monospace',
+              color: darkText,
+            ),
+          ),
+          const SizedBox(height: 32),
+          const Divider(),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _logout,
+            icon: const Icon(Icons.logout),
+            label: const Text('Log Out'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Shared card wrapper ──────────────────────────────────────────────────────
+
+  Widget _card({required Widget child}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  // ─── Bottom Nav ──────────────────────────────────────────────────────────────
+
+  Widget _buildBottomNav() {
+    return Container(
+      height: 64,
+      decoration: const BoxDecoration(color: navyBlue),
+      child: Row(
+        children: [
+          _navItem(index: 0, icon: Icons.home_rounded, label: 'Home'),
+          _navItem(index: 1, icon: Icons.settings_rounded, label: 'Settings'),
+        ],
+      ),
+    );
+  }
+
+  Widget _navItem({
+    required int index,
+    required IconData icon,
+    required String label,
+  }) {
+    final active = _selectedIndex == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _selectedIndex = index),
+        child: Container(
+          color: active ? yellow : navyBlue,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: active ? navyBlue : Colors.white, size: 22),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  color: active ? navyBlue : Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
