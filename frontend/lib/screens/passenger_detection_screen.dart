@@ -2,10 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-/// PassengerDetectionScreen
-/// Requires in pubspec.yaml:
-///   web_socket_channel: ^2.4.0
-
 class PassengerDetectionScreen extends StatefulWidget {
   const PassengerDetectionScreen({super.key});
 
@@ -16,16 +12,20 @@ class PassengerDetectionScreen extends StatefulWidget {
 
 class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     with SingleTickerProviderStateMixin {
-  // ── WebSocket ─────────────────────────────────────────────────────────────
-  static const String _wsUrl = 'ws://127.0.0.1:8000/websocket/counts';
+  // ── WebSocket (ESP32 over hotspot Wi-Fi) ──────────────────────────────────
+  // Replace with your ESP32 hotspot IP shown in Serial Monitor.
+  static const String _wsUrl = 'ws://172.20.10.5:81';
   WebSocketChannel? _channel;
   bool _isConnected = false;
+  double _busWeightGrams = 0.0;
+  double _latitude = 0.0;
+  double _longitude = 0.0;
+  bool _gpsValid = false;
+  static const double _maxBusWeightGrams = 4000.0;
 
-  // ── Animation (pulse for detection indicator) ─────────────────────────────
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
-  // ── Data ─────────────────────────────────────────────────────────────────
   final Map<String, int> _classCounts = {
     'Child Male': 0,
     'Adult Male': 0,
@@ -37,10 +37,10 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
 
   int get _totalPassengers =>
       _classCounts.values.fold(0, (sum, count) => sum + count);
+  bool get _isOverweight => _busWeightGrams >= _maxBusWeightGrams;
 
   final String _carModel = 'Toyota Innova Zenix';
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
@@ -64,26 +64,14 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     super.dispose();
   }
 
-  // ── WebSocket ─────────────────────────────────────────────────────────────
   void _connectWebSocket() {
     try {
       _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
-
       setState(() => _isConnected = true);
 
       _channel!.stream.listen(
         (message) {
-          final data = jsonDecode(message);
-          final classCounts = data['class_counts'] ?? {};
-          setState(() {
-            _isConnected = true;
-            _classCounts['Child Male'] = classCounts['Child Male'] ?? 0;
-            _classCounts['Adult Male'] = classCounts['Adult Male'] ?? 0;
-            _classCounts['Senior Male'] = classCounts['Senior Male'] ?? 0;
-            _classCounts['Child Female'] = classCounts['Child Female'] ?? 0;
-            _classCounts['Adult Female'] = classCounts['Adult Female'] ?? 0;
-            _classCounts['Senior Female'] = classCounts['Senior Female'] ?? 0;
-          });
+          _handleIncomingLine(message.toString());
         },
         onError: (error) {
           setState(() => _isConnected = false);
@@ -100,13 +88,49 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
     }
   }
 
+  void _handleIncomingLine(String line) {
+    try {
+      final data = jsonDecode(line);
+      if (data is! Map<String, dynamic>) return;
+      final type = data['type'];
+      if (type != 'telemetry' && type != 'status') return;
+
+      final rawCount = data['passenger_count'];
+      final total = rawCount is int ? rawCount : int.tryParse('$rawCount') ?? 0;
+      final rawWeight = data['weight_g'];
+      final rawLat = data['latitude'];
+      final rawLng = data['longitude'];
+      final rawGpsValid = data['gps_valid'];
+      setState(() {
+        _isConnected = true;
+        _classCounts['Child Male'] = 0;
+        _classCounts['Adult Male'] = total;
+        _classCounts['Senior Male'] = 0;
+        _classCounts['Child Female'] = 0;
+        _classCounts['Adult Female'] = 0;
+        _classCounts['Senior Female'] = 0;
+        _busWeightGrams = rawWeight is num
+            ? rawWeight.toDouble()
+            : double.tryParse('$rawWeight') ?? 0.0;
+        _latitude = rawLat is num
+            ? rawLat.toDouble()
+            : double.tryParse('$rawLat') ?? 0.0;
+        _longitude = rawLng is num
+            ? rawLng.toDouble()
+            : double.tryParse('$rawLng') ?? 0.0;
+        _gpsValid = rawGpsValid == true;
+      });
+    } catch (_) {
+      // Ignore malformed lines from serial stream.
+    }
+  }
+
   void _retryConnection() {
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) _connectWebSocket();
     });
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -307,7 +331,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
           ),
           const SizedBox(height: 6),
           const Text(
-            'Python model is running • Camera feed on server',
+            'Receiving live counts from ESP32 WebSocket',
             style: TextStyle(fontSize: 12, color: Color(0xFF5A6275)),
           ),
           const SizedBox(height: 28),
@@ -342,6 +366,81 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
               ],
             ),
           ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF161A23),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF2A2F3D)),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'Bus Weight: ${_busWeightGrams.toStringAsFixed(1)} g',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFE8EAF0),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _gpsValid
+                      ? 'GPS: ${_latitude.toStringAsFixed(6)}, ${_longitude.toStringAsFixed(6)}'
+                      : 'GPS: Waiting for fix...',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF5A6275),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            decoration: BoxDecoration(
+              color:
+                  (_isOverweight
+                          ? const Color(0xFFFF6B6B)
+                          : const Color(0xFF0FBF6A))
+                      .withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color:
+                    (_isOverweight
+                            ? const Color(0xFFFF6B6B)
+                            : const Color(0xFF0FBF6A))
+                        .withOpacity(0.45),
+              ),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'WEIGHT STATUS',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                    color: Color(0xFFB8BFCC),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _isOverweight ? 'OVERWEIGHT' : 'NORMAL',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                    color: _isOverweight
+                        ? const Color(0xFFFF6B6B)
+                        : const Color(0xFF0FBF6A),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -371,7 +470,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
           ),
           const SizedBox(height: 20),
           const Text(
-            'SERVER OFFLINE',
+            'ESP32 OFFLINE',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w700,
@@ -381,12 +480,12 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
           ),
           const SizedBox(height: 6),
           const Text(
-            'Make sure your FastAPI server is running',
+            'Connect phone + ESP32 to same hotspot network',
             style: TextStyle(fontSize: 12, color: Color(0xFF5A6275)),
           ),
           const SizedBox(height: 4),
           const Text(
-            'uvicorn backend.app.main:app --reload',
+            'Set _wsUrl to ws://<esp32-ip>:81',
             style: TextStyle(
               fontSize: 11,
               color: Color(0xFF3D4558),

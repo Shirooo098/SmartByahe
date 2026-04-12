@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:frontend/auth_service.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({super.key, required this.role});
+  final String role; // 'driver' or 'passenger'
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -36,40 +38,66 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  void _handleRegister() async {
+  Future<void> _handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
-
-    // if (!_agreeToTerms) {
-    //   ScaffoldMessenger.of(context).showSnackBar(
-    //     const SnackBar(
-    //       content: Text('Please agree to the Terms & Conditions to continue.'),
-    //       backgroundColor: Colors.redAccent,
-    //     ),
-    //   );
-    //   return;
-    // }
-
     setState(() => _isLoading = true);
 
     try {
-      await authService.value.createAccount(
-        email: _emailController.text,
-        password: _passwordController.text,
-      );
+      // Step 1: Create Auth account
+      final credential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
 
-      // ✅ Navigate after success
-      context.go('/HomePage');
+      // Step 2: Save to Firestore with uid as doc ID
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(credential.user!.uid)
+          .set({
+            'email': _emailController.text.trim(),
+            'role': widget.role, // 'driver' or 'passenger'
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
+      // Step 3: Go to correct home based on role
+      if (mounted) context.go('/${widget.role}-home');
     } on FirebaseAuthException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Registration failed')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_friendlyError(e.code)),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Something went wrong. Please try again.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-
-    setState(() => _isLoading = false);
   }
 
-  void _handleGoogleRegister() {
-    // TODO: Implement Google Sign-In
+  String _friendlyError(String code) {
+    switch (code) {
+      case 'email-already-in-use':
+        return 'An account with this email already exists.';
+      case 'invalid-email':
+        return 'Please enter a valid email address.';
+      case 'weak-password':
+        return 'Password is too weak. Use at least 6 characters.';
+      case 'network-request-failed':
+        return 'No internet connection. Please check your network.';
+      default:
+        return 'Registration failed. Please try again.';
+    }
   }
 
   @override
@@ -314,9 +342,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                       const SizedBox(height: 28),
 
-                      // Google Button
-                      Center(child: _buildGoogleButton()),
-
                       const SizedBox(height: 32),
                     ],
                   ),
@@ -437,40 +462,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildGoogleButton() {
-    return GestureDetector(
-      onTap: _handleGoogleRegister,
-      child: Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade200, width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Center(
-          child: Image.network(
-            'https://www.google.com/favicon.ico',
-            width: 28,
-            height: 28,
-            errorBuilder: (context, error, stackTrace) => const Icon(
-              Icons.g_mobiledata_rounded,
-              size: 32,
-              color: Color(0xFF4285F4),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
