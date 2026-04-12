@@ -98,6 +98,24 @@ class LandingPage extends StatelessWidget {
               ),
 
               const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => context.push('/driver-home'),
+                      child: const Text('Driver Home'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => context.push('/passenger-home'),
+                      child: const Text('Passenger Home'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
 
               // Terms text
               const Text(

@@ -6,7 +6,11 @@ import 'screens/landing_page.dart';
 import 'screens/login_forms.dart';
 import 'screens/register_forms.dart';
 import 'screens/homepage.dart';
+import 'screens/driver_homepage.dart';
+import 'screens/passenger_homepage.dart';
+import 'screens/passenger_detection_screen.dart';
 import 'auth_layout.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +27,15 @@ final GoRouter _router = GoRouter(
       builder: (context, state) => const LoginFormScreen(),
     ),
     GoRoute(path: '/HomePage', builder: (context, state) => const Homepage()),
+    GoRoute(path: '/driver-home', builder: (context, state) => const DriverHomepage()),
+    GoRoute(
+      path: '/passenger-home',
+      builder: (context, state) => const PassengerHomepage(),
+    ),
+    GoRoute(
+      path: '/passenger-detection',
+      builder: (context, state) => const PassengerDetectionScreen(),
+    ),
     GoRoute(
       path: '/register',
       builder: (context, state) => const RegisterScreen(),

@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class Homepage extends StatefulWidget {
   const Homepage({super.key});
@@ -13,6 +15,18 @@ void handleLogout(BuildContext context) {
 
 class _HomepageState extends State<Homepage> {
   int _selectedIndex = 0; // 0 = Home (active), 1 = Settings
+  static const String _espWsUrl = 'ws://172.20.10.5:81';
+  // Replace with your backend machine IP when running on phone.
+  static const String _backendWsUrl = 'ws://192.168.56.1:8000/websocket/counts';
+  static const double _maxBusWeightGrams = 4000.0;
+  WebSocketChannel? _espChannel;
+  WebSocketChannel? _backendChannel;
+  bool _isEspConnected = false;
+  bool _isBackendConnected = false;
+  double _busWeightGrams = 0.0;
+  double _frontPct = 0.0;
+  double _backPct = 0.0;
+  int _passengerCount = 0;
 
   // Brand Colors
   static const Color navyBlue = Color(0xFF1B3A6B);
@@ -29,6 +43,105 @@ class _HomepageState extends State<Homepage> {
       'distance': '421m away',
     },
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _connectEspWebSocket();
+    _connectBackendWebSocket();
+  }
+
+  @override
+  void dispose() {
+    _espChannel?.sink.close();
+    _backendChannel?.sink.close();
+    super.dispose();
+  }
+
+  bool get _isOverweight => _busWeightGrams >= _maxBusWeightGrams;
+
+  void _connectEspWebSocket() {
+    try {
+      _espChannel = WebSocketChannel.connect(Uri.parse(_espWsUrl));
+      _espChannel!.stream.listen(
+        (message) {
+          final data = jsonDecode(message.toString());
+          if (data is! Map<String, dynamic>) return;
+          final type = data['type'];
+          if (type != 'telemetry' && type != 'status') return;
+
+          final rawWeight = data['weight_g'];
+          final rawFrontPct = data['front_pct'];
+          final rawBackPct = data['back_pct'];
+          final weight = rawWeight is num
+              ? rawWeight.toDouble()
+              : double.tryParse('$rawWeight') ?? 0.0;
+
+          if (!mounted) return;
+          setState(() {
+            _isEspConnected = true;
+            _busWeightGrams = weight;
+            _frontPct = rawFrontPct is num
+                ? rawFrontPct.toDouble()
+                : double.tryParse('$rawFrontPct') ?? 0.0;
+            _backPct = rawBackPct is num
+                ? rawBackPct.toDouble()
+                : double.tryParse('$rawBackPct') ?? 0.0;
+          });
+        },
+        onError: (_) {
+          if (!mounted) return;
+          setState(() => _isEspConnected = false);
+        },
+        onDone: () {
+          if (!mounted) return;
+          setState(() => _isEspConnected = false);
+        },
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isEspConnected = false);
+    }
+  }
+
+  void _connectBackendWebSocket() {
+    try {
+      _backendChannel = WebSocketChannel.connect(Uri.parse(_backendWsUrl));
+      _backendChannel!.stream.listen(
+        (message) {
+          final data = jsonDecode(message.toString());
+          if (data is! Map<String, dynamic>) return;
+
+          final rawTotal = data['total_passenger_counts'];
+          if (!mounted) return;
+          setState(() {
+            _isBackendConnected = true;
+            _passengerCount = rawTotal is int ? rawTotal : int.tryParse('$rawTotal') ?? 0;
+          });
+        },
+        onError: (_) {
+          if (!mounted) return;
+          setState(() => _isBackendConnected = false);
+          _retryBackendConnection();
+        },
+        onDone: () {
+          if (!mounted) return;
+          setState(() => _isBackendConnected = false);
+          _retryBackendConnection();
+        },
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isBackendConnected = false);
+      _retryBackendConnection();
+    }
+  }
+
+  void _retryBackendConnection() {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) _connectBackendWebSocket();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -101,6 +214,11 @@ class _HomepageState extends State<Homepage> {
           // Location Card
           _buildLocationCard(),
 
+          const SizedBox(height: 16),
+          _buildWeightStatusCard(),
+          const SizedBox(height: 12),
+          _buildDriverStatsCard(),
+
           const SizedBox(height: 28),
 
           // Biyahe Routes
@@ -125,6 +243,120 @@ class _HomepageState extends State<Homepage> {
               count: '10/12',
             ),
           )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWeightStatusCard() {
+    final statusColor = !_isEspConnected
+        ? Colors.grey
+        : (_isOverweight ? const Color(0xFFFF6B6B) : const Color(0xFF0FBF6A));
+    final statusText = !_isEspConnected
+        ? 'NO DATA'
+        : (_isOverweight ? 'OVERWEIGHT' : 'NORMAL');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Bus Weight Status',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: darkText,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Weight: ${_busWeightGrams.toStringAsFixed(1)} g',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF3D4558)),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: statusColor.withOpacity(0.4)),
+            ),
+            child: Text(
+              statusText,
+              style: TextStyle(
+                color: statusColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDriverStatsCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Driver Dashboard',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: darkText,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Passenger Count: $_passengerCount',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF3D4558)),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _isBackendConnected ? 'Passenger source: backend live' : 'Passenger source: backend offline',
+            style: const TextStyle(fontSize: 11, color: Color(0xFF70798A)),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Front Weight: ${_frontPct.toStringAsFixed(1)}%',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF3D4558)),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Back Weight: ${_backPct.toStringAsFixed(1)}%',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF3D4558)),
+          ),
         ],
       ),
     );

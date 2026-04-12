@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'screens/homepage.dart';
 import 'screens/landing_page.dart';
-
+import 'screens/passenger_detection_screen.dart';
 class AuthLayout extends StatelessWidget {
   const AuthLayout({super.key});
 
