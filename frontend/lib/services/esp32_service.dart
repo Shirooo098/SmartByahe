@@ -12,6 +12,12 @@ class Esp32Service {
   Stream<dynamic> connectRaw(Uri uri) {
     _channel?.sink.close();
     _channel = WebSocketChannel.connect(uri);
+    // Send auth token after connecting
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (_channel != null) {
+        _channel!.sink.add('smartbyahe2026');
+      }
+    });
     return _channel!.stream.map((raw) {
       try {
         return jsonDecode(raw.toString());
@@ -21,13 +27,13 @@ class Esp32Service {
     }).where((e) => e != null);
   }
 
-  /// Parsed [WeightData] for `type == telemetry` (or legacy `status`) messages only.
+  /// Parsed [WeightData] for GPS and weight data from backend.
   Stream<WeightData> telemetry(Uri uri) {
     return connectRaw(uri).map((decoded) {
       if (decoded is! Map) return null;
       final m = Map<String, dynamic>.from(decoded);
-      final t = m['type'];
-      if (t != 'telemetry' && t != 'status') return null;
+      // For backend, check if it has latitude (GPS data)
+      if (!m.containsKey('latitude')) return null;
       try {
         return WeightData.fromJson(m);
       } catch (_) {

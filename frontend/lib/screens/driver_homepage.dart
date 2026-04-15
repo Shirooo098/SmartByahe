@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/weight_data.dart';
 import '../services/esp32_service.dart';
-import 'role_selection.dart';
 
 class DriverHomepage extends StatefulWidget {
   const DriverHomepage({super.key});
@@ -20,11 +19,11 @@ class DriverHomepage extends StatefulWidget {
 class _DriverHomepageState extends State<DriverHomepage> {
   int _selectedIndex = 0;
 
-  static const String _defaultEspWsUrl = 'ws://192.168.4.1:81';
-  static const String _cameraWsUrl = 'ws://127.0.0.1:8000/ws/stream';
+  static const String _defaultEspWsUrl = 'ws://192.168.68.112:81';
+  static const String _cameraWsUrl = 'ws://192.168.68.105:8000/ws/stream';
 
-  static const double _maxBusWeightGrams = 4000.0;
-  static const int _maxPassengerCapacity = 22;
+  static const double _maxBusWeightGrams = 100.0;
+  static const int _maxPassengerCapacity = 12;
 
   static const Color navyBlue = Color(0xFF1B3A6B);
   static const Color yellow = Color(0xFFFFCC00);
@@ -34,6 +33,10 @@ class _DriverHomepageState extends State<DriverHomepage> {
   final Esp32Service _esp32Service = Esp32Service();
   StreamSubscription<WeightData>? _espTelemetrySub;
   Timer? _espRetryTimer;
+  final DocumentReference<Map<String, dynamic>> _tripDoc = FirebaseFirestore.instance.collection('trips').doc('activeTrip');
+  bool _tripStarted = false;
+  final String _routeCode = 'B001';
+  final String _routeName = 'Parang -> Cubao via Molave';
 
   WebSocketChannel? _cameraChannel;
   StreamSubscription<dynamic>? _cameraSub;
@@ -43,10 +46,15 @@ class _DriverHomepageState extends State<DriverHomepage> {
   String _espWsUrl = _defaultEspWsUrl;
   final TextEditingController _espUrlController = TextEditingController();
   bool _isEspConnected = false;
+  String? _espLastError;
   WeightData? _espTelemetry;
   int _passengerCount = 0;
-
-  GoogleMapController? _mapController;
+  int _childMale = 0;
+  int _adultMale = 0;
+  int _seniorMale = 0;
+  int _childFemale = 0;
+  int _adultFemale = 0;
+  int _seniorFemale = 0;
 
   @override
   void initState() {
@@ -74,6 +82,57 @@ class _DriverHomepageState extends State<DriverHomepage> {
   double get _latitude => _espTelemetry?.lat ?? 14.5995;
   double get _longitude => _espTelemetry?.lng ?? 120.9842;
   bool get _gpsValid => _espTelemetry?.gpsValid ?? false;
+  int get _satellites => _espTelemetry?.satellites ?? 0;
+  String get _tripPhase => _espTelemetry?.tripPhase ?? 'UNKNOWN';
+  double get _distToStartM => _espTelemetry?.distToStartM ?? -1.0;
+  double get _distToFinishM => _espTelemetry?.distToFinishM ?? -1.0;
+  bool get _isNoPassengerSeatsLeft => _passengerCount >= _maxPassengerCapacity;
+  bool get _isWeightOverloaded => _busWeightGrams >= _maxBusWeightGrams;
+  bool get _isLowSeverity => _isNoPassengerSeatsLeft && !_isWeightOverloaded;
+  bool get _isHighSeverity => _isNoPassengerSeatsLeft && _isWeightOverloaded;
+
+  String _tripPhaseLabel() {
+    switch (_tripPhase) {
+      case 'AT_START':
+        return 'At Start Terminal';
+      case 'DEPARTED_START':
+        return 'Departed Start Terminal';
+      case 'EN_ROUTE':
+        return 'En route';
+      case 'ARRIVED_FINISH':
+        return 'Arrived at Finish Terminal';
+      default:
+        return 'Waiting for geofence state';
+    }
+  }
+
+  Color _tripPhaseColor() {
+    switch (_tripPhase) {
+      case 'AT_START':
+        return Colors.amber.shade700;
+      case 'DEPARTED_START':
+        return const Color(0xFF2D8CFF);
+      case 'EN_ROUTE':
+        return const Color(0xFF4A90D9);
+      case 'ARRIVED_FINISH':
+        return const Color(0xFF0FBF6A);
+      default:
+        return Colors.grey.shade600;
+    }
+  }
+
+  String _tripPhaseDistanceLabel() {
+    if (_distToFinishM >= 0) {
+      if (_distToFinishM >= 1000) {
+        return '${(_distToFinishM / 1000).toStringAsFixed(2)} km to finish';
+      }
+      return '${_distToFinishM.toStringAsFixed(0)} m to finish';
+    }
+    if (_distToStartM >= 0) {
+      return '${_distToStartM.toStringAsFixed(0)} m from start';
+    }
+    return 'Distance unavailable';
+  }
 
   bool get _loadSensorHardwareActive {
     if (!_isEspConnected) return false;
@@ -87,7 +146,7 @@ class _DriverHomepageState extends State<DriverHomepage> {
   Color _loadStatusColor() {
     final d = _espTelemetry;
     if (!_isEspConnected || d == null) return Colors.grey;
-    if (d.isOverload) return const Color(0xFFFF6B6B);
+    if (_isWeightOverloaded) return const Color(0xFFFF6B6B);
     if (d.isImbalanceFront || d.isImbalanceBack) return Colors.orange;
     return const Color(0xFF0FBF6A);
   }
@@ -95,9 +154,8 @@ class _DriverHomepageState extends State<DriverHomepage> {
   String _loadStatusLabel() {
     final d = _espTelemetry;
     if (!_isEspConnected || d == null) return '—';
+    if (_isWeightOverloaded) return 'OVERLOAD';
     switch (d.status) {
-      case 'OVERLOAD':
-        return 'OVERLOAD';
       case 'IMBALANCE_FRONT':
         return 'IMBALANCE · FRONT';
       case 'IMBALANCE_BACK':
@@ -112,9 +170,12 @@ class _DriverHomepageState extends State<DriverHomepage> {
   Future<void> _connectEspWebSocketAsync({String? explicitUrl}) async {
     _espRetryTimer?.cancel();
 
-    final urlToUse = (explicitUrl ?? _espUrlController.text).trim().isNotEmpty
+    final rawUrl = (explicitUrl ?? _espUrlController.text).trim().isNotEmpty
         ? (explicitUrl ?? _espUrlController.text).trim()
         : _espWsUrl;
+    final urlToUse = rawUrl.endsWith('/')
+      ? rawUrl.substring(0, rawUrl.length - 1)
+      : rawUrl;
 
     final uri = Uri.tryParse(urlToUse);
     if (uri == null ||
@@ -124,6 +185,7 @@ class _DriverHomepageState extends State<DriverHomepage> {
         setState(() {
           _isEspConnected = false;
           _espTelemetry = null;
+          _espLastError = 'Invalid WebSocket URL';
         });
         ScaffoldMessenger.of(
           context,
@@ -141,6 +203,7 @@ class _DriverHomepageState extends State<DriverHomepage> {
       _espUrlController.text = urlToUse;
       _isEspConnected = false;
       _espTelemetry = null;
+      _espLastError = null;
     });
 
     _espTelemetrySub = _esp32Service
@@ -151,18 +214,18 @@ class _DriverHomepageState extends State<DriverHomepage> {
             setState(() {
               _isEspConnected = true;
               _espTelemetry = d;
+              _espLastError = null;
             });
-            if (d.gpsValid && _mapController != null) {
-              _mapController!.animateCamera(
-                CameraUpdate.newLatLng(LatLng(d.lat, d.lng)),
-              );
+            if (_tripStarted) {
+              unawaited(_publishTripState());
             }
           },
-          onError: (_) {
+          onError: (error) {
             if (!mounted) return;
             setState(() {
               _isEspConnected = false;
               _espTelemetry = null;
+              _espLastError = '$error';
             });
             _scheduleEspRetry();
           },
@@ -171,6 +234,7 @@ class _DriverHomepageState extends State<DriverHomepage> {
             setState(() {
               _isEspConnected = false;
               _espTelemetry = null;
+              _espLastError = 'Socket closed by server';
             });
             _scheduleEspRetry();
           },
@@ -190,6 +254,44 @@ class _DriverHomepageState extends State<DriverHomepage> {
     final next = _espUrlController.text.trim();
     if (next.isEmpty) return;
     await _connectEspWebSocketAsync(explicitUrl: next);
+  }
+
+  Future<void> _toggleTripActive() async {
+    setState(() {
+      _tripStarted = !_tripStarted;
+    });
+    await _publishTripState();
+  }
+
+  Future<void> _publishTripState() async {
+    final data = {
+      'isActive': _tripStarted,
+      'routeCode': _routeCode,
+      'routeName': _routeName,
+      'currentLat': _latitude,
+      'currentLng': _longitude,
+      'gpsValid': _gpsValid,
+      'tripPhase': _tripPhase,
+      'distToStartM': _distToStartM,
+      'distToFinishM': _distToFinishM,
+      'passengerCount': _passengerCount,
+      'maxCapacity': _maxPassengerCapacity,
+      'passengerBreakdown': {
+        'childMale': _childMale,
+        'adultMale': _adultMale,
+        'seniorMale': _seniorMale,
+        'childFemale': _childFemale,
+        'adultFemale': _adultFemale,
+        'seniorFemale': _seniorFemale,
+      },
+      'status': _loadStatusLabel(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    try {
+      await _tripDoc.set(data, SetOptions(merge: true));
+    } catch (_) {
+      // Ignore write failures for now.
+    }
   }
 
   Future<void> _logout() async {
@@ -238,13 +340,100 @@ class _DriverHomepageState extends State<DriverHomepage> {
           setState(() {
             _isCameraConnected = true;
             _cameraFrameBase64 = data['frame'] as String?;
+
+            final breakdown = (data['breakdown'] is Map)
+                ? Map<String, dynamic>.from(data['breakdown'] as Map)
+                : <String, dynamic>{};
+
+            final classCounts = (data['class_counts'] is Map)
+                ? Map<String, dynamic>.from(data['class_counts'] as Map)
+                : <String, dynamic>{};
+
+            _childMale = _parseCount(
+              breakdown['childMale'] ??
+                  data['childMale'] ??
+                  data['child_male'] ??
+                  _countFromClassCounts(classCounts, const [
+                    'Child Male',
+                    'child male',
+                    'child_male',
+                    'childMale',
+                  ]),
+            );
+            _adultMale = _parseCount(
+              breakdown['adultMale'] ??
+                  data['adultMale'] ??
+                  data['adult_male'] ??
+                  _countFromClassCounts(classCounts, const [
+                    'Adult Male',
+                    'adult male',
+                    'adult_male',
+                    'adultMale',
+                  ]),
+            );
+            _seniorMale = _parseCount(
+              breakdown['seniorMale'] ??
+                  data['seniorMale'] ??
+                  data['senior_male'] ??
+                  _countFromClassCounts(classCounts, const [
+                    'Senior Male',
+                    'senior male',
+                    'senior_male',
+                    'seniorMale',
+                  ]),
+            );
+            _childFemale = _parseCount(
+              breakdown['childFemale'] ??
+                  data['childFemale'] ??
+                  data['child_female'] ??
+                  _countFromClassCounts(classCounts, const [
+                    'Child Female',
+                    'child female',
+                    'child_female',
+                    'childFemale',
+                  ]),
+            );
+            _adultFemale = _parseCount(
+              breakdown['adultFemale'] ??
+                  data['adultFemale'] ??
+                  data['adult_female'] ??
+                  _countFromClassCounts(classCounts, const [
+                    'Adult Female',
+                    'adult female',
+                    'adult_female',
+                    'adultFemale',
+                  ]),
+            );
+            _seniorFemale = _parseCount(
+              breakdown['seniorFemale'] ??
+                  data['seniorFemale'] ??
+                  data['senior_female'] ??
+                  _countFromClassCounts(classCounts, const [
+                    'Senior Female',
+                    'senior female',
+                    'senior_female',
+                    'seniorFemale',
+                  ]),
+            );
+
             final rawTotal = data['total'];
             if (rawTotal != null) {
               _passengerCount = rawTotal is int
                   ? rawTotal
                   : int.tryParse('$rawTotal') ?? _passengerCount;
+            } else {
+              _passengerCount =
+                  _childMale +
+                  _adultMale +
+                  _seniorMale +
+                  _childFemale +
+                  _adultFemale +
+                  _seniorFemale;
             }
           });
+          if (_tripStarted) {
+            unawaited(_publishTripState());
+          }
         } catch (_) {}
       },
       onError: (_) {
@@ -265,6 +454,21 @@ class _DriverHomepageState extends State<DriverHomepage> {
       },
       cancelOnError: true,
     );
+  }
+
+  int _parseCount(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
+  int _countFromClassCounts(Map<String, dynamic> classCounts, List<String> keys) {
+    for (final key in keys) {
+      if (classCounts.containsKey(key)) {
+        return _parseCount(classCounts[key]);
+      }
+    }
+    return 0;
   }
 
   void _disconnectCameraWebSocket() {
@@ -306,7 +510,7 @@ class _DriverHomepageState extends State<DriverHomepage> {
               child: Image.asset(
                 'assets/images/nobglogo.png',
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) =>
+                errorBuilder: (context, error, stackTrace) =>
                     const Icon(Icons.directions_bus, color: navyBlue, size: 30),
               ),
             ),
@@ -356,16 +560,72 @@ class _DriverHomepageState extends State<DriverHomepage> {
           ),
           const SizedBox(height: 12),
           _buildRouteCard(),
-          const SizedBox(height: 16),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: _buildStatCard(
-                  label: 'Passengers',
-                  value: '$_passengerCount / $_maxPassengerCapacity',
+          if (_isLowSeverity || _isHighSeverity) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: (_isHighSeverity
+                        ? const Color(0xFFFF6B6B)
+                        : const Color(0xFFFFCC66))
+                    .withValues(alpha: 0.24),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _isHighSeverity
+                      ? const Color(0xFFFF6B6B)
+                      : const Color(0xFFFFB300),
+                  width: 1,
                 ),
               ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: _isHighSeverity
+                          ? const Color(0xFFFF8A8A)
+                          : const Color(0xFFFFE0A3),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.warning_amber_rounded,
+                      color: _isHighSeverity
+                          ? const Color(0xFFFF3B3B)
+                          : const Color(0xFFB56B00),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _isHighSeverity
+                              ? 'HIGH SEVERITY: No passenger seats left and weight exceeded'
+                              : 'LOW SEVERITY: No passenger seats left',
+                          style: TextStyle(
+                            color: _isHighSeverity
+                                ? const Color(0xFFFF3B3B)
+                                : const Color(0xFFB56B00),
+                            fontSize: 36 / 3,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(child: _buildPassengerCard()),
               const SizedBox(width: 12),
               Expanded(child: _buildWeightCard()),
             ],
@@ -373,7 +633,7 @@ class _DriverHomepageState extends State<DriverHomepage> {
           const SizedBox(height: 12),
           _buildDriverTelemetrySummaryCard(),
           const SizedBox(height: 16),
-          _buildGpsSection(),
+          _buildTripToggleCard(),
           const SizedBox(height: 16),
           _buildCameraSection(),
           const SizedBox(height: 20),
@@ -398,51 +658,88 @@ class _DriverHomepageState extends State<DriverHomepage> {
 
   Widget _buildRouteCard() {
     return _card(
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Column(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 14,
-                height: 14,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: yellow,
+              Column(
+                children: [
+                  Container(
+                    width: 14,
+                    height: 14,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: yellow,
+                    ),
+                  ),
+                  SizedBox(
+                    height: 36,
+                    child: CustomPaint(
+                      painter: _DashedLinePainter(),
+                      size: const Size(2, 36),
+                    ),
+                  ),
+                  const Icon(Icons.location_on, color: yellow, size: 22),
+                ],
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Parang Terminal',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'monospace',
+                        color: darkText,
+                      ),
+                    ),
+                    SizedBox(height: 28),
+                    Text(
+                      'Cubao Terminal',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'monospace',
+                        color: darkText,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              SizedBox(
-                height: 36,
-                child: CustomPaint(
-                  painter: _DashedLinePainter(),
-                  size: const Size(2, 36),
-                ),
-              ),
-              const Icon(Icons.location_on, color: yellow, size: 22),
             ],
           ),
-          const SizedBox(width: 14),
-          const Expanded(
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: _tripPhaseColor().withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Parang Terminal',
+                  _tripPhaseLabel(),
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: _tripPhaseColor(),
                     fontFamily: 'monospace',
-                    color: darkText,
                   ),
                 ),
-                SizedBox(height: 28),
+                const SizedBox(height: 2),
                 Text(
-                  'Cubao Terminal',
+                  _tripPhaseDistanceLabel(),
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                    color: Colors.grey.shade700,
                     fontFamily: 'monospace',
-                    color: darkText,
                   ),
                 ),
               ],
@@ -481,68 +778,114 @@ class _DriverHomepageState extends State<DriverHomepage> {
     );
   }
 
+  Widget _buildPassengerCard() {
+    return _card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Passengers',
+            style: TextStyle(
+              fontSize: 36 / 2.6,
+              color: Color(0xFF1E1F24),
+              fontWeight: FontWeight.w700,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 14),
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(fontFamily: 'monospace'),
+              children: [
+                TextSpan(
+                  text: '$_passengerCount',
+                  style: TextStyle(
+                    fontSize: 52 / 1.8,
+                    fontWeight: FontWeight.w800,
+                    color: _isNoPassengerSeatsLeft
+                        ? const Color(0xFFFF1F1F)
+                        : navyBlue,
+                  ),
+                ),
+                const TextSpan(
+                  text: '/',
+                  style: TextStyle(
+                    fontSize: 52 / 2.1,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF4A90D9),
+                  ),
+                ),
+                const TextSpan(
+                  text: '12',
+                  style: TextStyle(
+                    fontSize: 52 / 2.1,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1F4E94),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            height: 2,
+            color: _isNoPassengerSeatsLeft
+                ? const Color(0xFFFF3B3B)
+                : Colors.grey.shade300,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildWeightCard() {
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const Text(
             'Weight Load',
             style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey.shade600,
+              fontSize: 36 / 2.6,
+              color: Color(0xFF1E1F24),
+              fontWeight: FontWeight.w700,
               fontFamily: 'monospace',
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            '${_busWeightGrams.toStringAsFixed(0)} g',
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              color: navyBlue,
-              fontFamily: 'monospace',
+          const SizedBox(height: 14),
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(fontFamily: 'monospace'),
+              children: [
+                TextSpan(
+                  text: '${_busWeightGrams.toStringAsFixed(0)} g',
+                  style: TextStyle(
+                    fontSize: 52 / 1.9,
+                    fontWeight: FontWeight.w800,
+                    color: _isWeightOverloaded
+                        ? const Color(0xFFFF1F1F)
+                        : navyBlue,
+                  ),
+                ),
+                const TextSpan(
+                  text: '/100 g',
+                  style: TextStyle(
+                    fontSize: 52 / 2.2,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1F4E94),
+                  ),
+                ),
+              ],
             ),
           ),
-          Text(
-            'Limit ${_maxBusWeightGrams.toStringAsFixed(0)} g',
-            style: TextStyle(
-              fontSize: 10,
-              color: Colors.grey.shade600,
-              fontFamily: 'monospace',
-            ),
-          ),
-          if (_isEspConnected && _espTelemetry != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              'Front ${_espTelemetry!.frontWeight.toStringAsFixed(0)} g · Back ${_espTelemetry!.backWeight.toStringAsFixed(0)} g',
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey.shade700,
-                fontFamily: 'monospace',
-              ),
-            ),
-            Text(
-              'Split ${_espTelemetry!.frontPct.toStringAsFixed(0)}% / ${_espTelemetry!.backPct.toStringAsFixed(0)}%',
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey.shade700,
-                fontFamily: 'monospace',
-              ),
-            ),
-          ],
-          const SizedBox(height: 6),
-          Center(
-            child: Text(
-              _loadStatusLabel(),
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.0,
-                color: _loadStatusColor(),
-                fontFamily: 'monospace',
-              ),
-            ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            height: 2,
+            color: _isWeightOverloaded
+                ? const Color(0xFFFF3B3B)
+                : Colors.grey.shade300,
           ),
         ],
       ),
@@ -591,64 +934,6 @@ class _DriverHomepageState extends State<DriverHomepage> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _telemetryTile(
-                        'Total Weight',
-                        '${_busWeightGrams.toStringAsFixed(0)} g',
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _telemetryTile(
-                        'Status',
-                        _loadStatusLabel(),
-                        valueColor: _loadStatusColor(),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _telemetryTile(
-                        'Front Load',
-                        '${_espTelemetry!.frontWeight.toStringAsFixed(0)} g',
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _telemetryTile(
-                        'Back Load',
-                        '${_espTelemetry!.backWeight.toStringAsFixed(0)} g',
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _telemetryTile(
-                        'Speed',
-                        '${_espTelemetry!.speedKmh.toStringAsFixed(1)} km/h',
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _telemetryTile(
-                        'Satellites',
-                        '${_espTelemetry!.satellites}',
-                        valueColor: _espTelemetry!.satellites > 3
-                            ? const Color(0xFF0FBF6A)
-                            : Colors.orange,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
                 _telemetryTile(
                   'GPS',
                   _gpsValid
@@ -693,88 +978,52 @@ class _DriverHomepageState extends State<DriverHomepage> {
     );
   }
 
-  Widget _buildGpsSection() {
-    return Container(
-      height: 180,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
+  Widget _buildTripToggleCard() {
+    return _card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Positioned.fill(
-            child: _gpsValid
-                ? GoogleMap(
-                    initialCameraPosition: CameraPosition(
-                      target: LatLng(_latitude, _longitude),
-                      zoom: 15,
-                    ),
-                    markers: {
-                      Marker(
-                        markerId: const MarkerId('bus'),
-                        position: LatLng(_latitude, _longitude),
-                      ),
-                    },
-                    onMapCreated: (c) {
-                      _mapController = c;
-                      c.animateCamera(
-                        CameraUpdate.newLatLng(LatLng(_latitude, _longitude)),
-                      );
-                    },
-                    zoomControlsEnabled: false,
-                    myLocationButtonEnabled: false,
-                  )
-                : Container(
-                    color: const Color(0xFFE8ECF0),
-                    child: const Center(
-                      child: Text(
-                        'Waiting for GPS fix from ESP32…',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          color: Color(0xFF5A6275),
-                        ),
-                      ),
-                    ),
-                  ),
-          ),
-          Positioned(
-            left: 12,
-            top: 10,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'GPS LOCATION',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    fontFamily: 'monospace',
-                    color: darkText,
-                    shadows: const [Shadow(color: Colors.white, blurRadius: 4)],
-                  ),
-                ),
-                Text(
-                  'GY-NEO6MV2 · u-blox NEO-6M',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'monospace',
-                    color: darkText.withValues(alpha: 0.75),
-                    shadows: const [Shadow(color: Colors.white, blurRadius: 3)],
-                  ),
-                ),
-              ],
+          const Text(
+            'Trip Control',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey,
+              fontFamily: 'monospace',
             ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            _tripStarted ? 'Trip in progress' : 'Trip not started',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: _tripStarted ? const Color(0xFF0FBF6A) : darkText,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Toggle this switch to show or hide the live byahe route for passengers.',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey.shade700,
+              fontFamily: 'monospace',
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: _toggleTripActive,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _tripStarted ? Colors.redAccent : navyBlue,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text(_tripStarted ? 'Stop Trip' : 'Start Trip'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1008,6 +1257,17 @@ class _DriverHomepageState extends State<DriverHomepage> {
               fontFamily: 'monospace',
             ),
           ),
+          if (!_isEspConnected && _espLastError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Last error: $_espLastError',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.red.shade400,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
           const SizedBox(height: 32),
           const Divider(),
           const SizedBox(height: 16),

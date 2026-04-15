@@ -51,7 +51,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       final Position position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.bestForNavigation,
-          timeLimit: const Duration(seconds: 10),
+          timeLimit: Duration(seconds: 10),
         ),
       );
 
@@ -147,7 +147,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
+                    color: Colors.black.withValues(alpha: 0.12),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -211,7 +211,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
+                      color: Colors.black.withValues(alpha: 0.15),
                       blurRadius: 8,
                       offset: const Offset(0, 3),
                     ),
@@ -280,7 +280,7 @@ class _LocationMarker extends StatelessWidget {
         border: Border.all(color: Colors.white, width: 3),
         boxShadow: [
           BoxShadow(
-            color: Colors.orange.withOpacity(0.4),
+            color: Colors.orange.withValues(alpha: 0.4),
             blurRadius: 8,
             spreadRadius: 2,
           ),

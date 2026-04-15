@@ -18,6 +18,7 @@ async def websocket_stream(websocket: WebSocket):
                     "frame": latest_data["frame"],           
                     "region_counts": latest_data.get("region_counts", {}),
                     "class_counts": latest_data.get("class_counts", {}),
+                    "breakdown": latest_data.get("breakdown", {}),
                     "total": latest_data.get("total_passenger_counts", 0),
                 })
                 await websocket.send_text(payload)

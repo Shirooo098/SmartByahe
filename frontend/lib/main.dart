@@ -9,6 +9,7 @@ import 'screens/register_forms.dart';
 import 'screens/driver_homepage.dart';
 import 'screens/passenger_homepage.dart';
 import 'screens/passenger_detection_screen.dart';
+import 'screens/passenger_route_detail_screen.dart';
 import 'auth_layout.dart';
 import 'screens/role_selection.dart';
 
@@ -22,6 +23,7 @@ void main() async {
 const _protectedRoutes = [
   '/driver-home',
   '/passenger-home',
+  '/passenger-route-detail',
   '/passenger-detection',
   '/role-selection',
   '/HomePage',
@@ -61,6 +63,18 @@ final GoRouter _router = GoRouter(
     GoRoute(
       path: '/passenger-home',
       builder: (context, state) => const PassengerHomepage(),
+    ),
+    GoRoute(
+      path: '/passenger-route-detail',
+      builder: (context, state) {
+        final extra = state.extra as Map<String, dynamic>? ?? {};
+        return PassengerRouteDetailScreen(
+          tripId: extra['tripId'] as String? ?? 'activeTrip',
+          routeCode: extra['routeCode'] as String? ?? 'B001',
+          routeName:
+              extra['routeName'] as String? ?? 'Parang - Cubao, via Molave',
+        );
+      },
     ),
     GoRoute(
       path: '/passenger-detection',

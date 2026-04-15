@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:go_router/go_router.dart';
 
 class PassengerHomepage extends StatefulWidget {
@@ -15,6 +18,38 @@ class _PassengerHomepageState extends State<PassengerHomepage> {
   static const Color darkText = Color(0xFF1E2A3B);
 
   int _selectedIndex = 0;
+  bool _tripActive = false;
+  int _tripPassengerCount = 0;
+  String _tripRouteName = '';
+  String _tripRouteCode = 'B001';
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _tripSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _tripSubscription = FirebaseFirestore.instance
+        .collection('trips')
+        .doc('activeTrip')
+        .snapshots()
+        .listen((snapshot) {
+      final data = snapshot.data();
+      if (!mounted) return;
+      setState(() {
+        _tripActive = data?['isActive'] == true;
+        _tripRouteName = data?['routeName'] as String? ?? '';
+        _tripRouteCode = data?['routeCode'] as String? ?? 'B001';
+        _tripPassengerCount = data?['passengerCount'] is int
+            ? data!['passengerCount'] as int
+            : int.tryParse('${data?['passengerCount']}') ?? 0;
+      });
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _tripSubscription?.cancel();
+    super.dispose();
+  }
 
   // ─── Logout ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +105,7 @@ class _PassengerHomepageState extends State<PassengerHomepage> {
               child: Image.asset(
                 'assets/images/nobglogo.png',
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) =>
+                errorBuilder: (context, error, stackTrace) =>
                     const Icon(Icons.directions_bus, color: navyBlue, size: 30),
               ),
             ),
@@ -111,19 +146,17 @@ class _PassengerHomepageState extends State<PassengerHomepage> {
             ),
           ),
           const SizedBox(height: 16),
-          _card(
-            child: const Center(
-              child: Text(
-                'Welcome, Passenger!',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  fontFamily: 'monospace',
-                  color: darkText,
-                ),
-              ),
+          const Text(
+            'Biyahe Routes',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: darkText,
+              fontFamily: 'monospace',
             ),
           ),
+          const SizedBox(height: 12),
+          _buildPassengerTripCard(),
         ],
       ),
     );
@@ -160,6 +193,78 @@ class _PassengerHomepageState extends State<PassengerHomepage> {
           ),
         ],
       ),
+    );
+  }
+  Widget _buildPassengerTripCard() {
+    return _card(
+      child: _tripActive
+          ? InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () {
+                context.push(
+                  '/passenger-route-detail',
+                  extra: {
+                    'tripId': 'activeTrip',
+                    'routeCode': _tripRouteCode,
+                    'routeName': _tripRouteName,
+                  },
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 26,
+                      height: 26,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF7DA8FF),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          _tripRouteCode,
+                          style: const TextStyle(
+                            fontSize: 8,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _tripRouteName,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: darkText,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '$_tripPassengerCount/12',
+                      style: const TextStyle(
+                        fontSize: 26,
+                        color: Color(0xFF2E62AE),
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : const Text(
+              'Waiting for the driver to start the trip.',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey,
+                fontFamily: 'monospace',
+              ),
+            ),
     );
   }
 

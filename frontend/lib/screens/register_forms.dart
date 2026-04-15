@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:frontend/auth_service.dart';
 import 'package:go_router/go_router.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -17,7 +16,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
-  bool _agreeToTerms = false;
   bool _receiveOffers = false;
   bool _isLoading = false;
 
@@ -283,7 +281,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: navyBlue,
                             foregroundColor: Colors.white,
-                            disabledBackgroundColor: navyBlue.withOpacity(0.6),
+                            disabledBackgroundColor: navyBlue.withValues(alpha: 0.6),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
                             ),
@@ -374,7 +372,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: textGray.withOpacity(0.7), fontSize: 14),
+        hintStyle: TextStyle(color: textGray.withValues(alpha: 0.7), fontSize: 14),
         suffixIcon: suffixIcon != null
             ? Padding(
                 padding: const EdgeInsets.only(right: 12),

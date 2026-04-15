@@ -1,571 +1,435 @@
+// Bus weight monitor — ESP32 + HX711 ×2 + NEO-6M GPS
+// Measures total weight only. Overload above 4 kg.
+
 #include <WiFi.h>
 #include <WebSocketsServer.h>
+#include <HTTPClient.h>
 #include "HX711.h"
 #include <TinyGPS++.h>
 
-// High-precision weight tracking
-#define SAMPLES_PER_READ 50  // Increase samples for better precision
-#define EMA_ALPHA 0.05f      // Tighter EMA (0.05 = 5% new, 95% old) for high sensitivity
-#define GPS_AVG_SIZE 5
-#define WEIGHT_DELTA_THRESHOLD 0.5f       // Alert if weight changes by more than 0.5g
-#define MIN_WEIGHT_G_SENSITIVE 0.5f       // Ultra-low noise floor for clay detection
-#define BASELINE_MIN_MODEL_WEIGHT 100.0f  // Minimum weight considered as bus model baseline
-#define BASELINE_SAMPLE_COUNT 10          // Number of startup readings to average for baseline
-#define BASELINE_STABLE_THRESHOLD 5.0f    // Require stable raw reading before capture
-#define BASELINE_STABLE_READS 5           // Number of stable startup samples required
+// ── Config ────────────────────────────────────────────────────────────────────
+const char*    kSsid      = "MNDZ1";  // Change to your phone's hotspot name
+const char*    kPassword  = "08091125#OAkc";  // Change to your hotspot password
+const char*    kAuthToken = "smartbyahe2026";
+const uint16_t kWsPort    = 81;
+const char*    kBackendUrl = "http://192.168.68.105:8000/gps";  // PC/backend IP on hotspot
 
-// FreeRTOS task priorities and stack sizes
-#define SENSOR_TASK_PRIORITY 1
-#define WEBSOCKET_TASK_PRIORITY 2
-#define SENSOR_STACK_SIZE 4096
-#define WEBSOCKET_STACK_SIZE 4096
 
-// Simple auth token (change in production)
-const char *AUTH_TOKEN = "smartbyahe2026";
-
-const char *kHotspotSsid = "MNDZ1";
-const char *kHotspotPassword = "08091125#OAkc";
-const uint16_t kWebSocketPort = 81;
-
-const unsigned long kSendIntervalMs = 1000;
-unsigned long lastSendMs = 0;
-
-#define FRONT_DT 4
-#define FRONT_SCK 5
-#define BACK_DT 18
-#define BACK_SCK 19
-
-#define FRONT_CAL 433.57
-#define BACK_CAL 434.68
-
-#ifndef MIN_WEIGHT_G
-#define MIN_WEIGHT_G 50
-#endif
-
-#define MAX_WEIGHT_GRAMS 4000.0f
-#define IMBALANCE_THRESHOLD_PCT 60.0f
-#define MIN_WEIGHT_FOR_BALANCE_G 200.0f
-
-#define USE_STATIC_IP 0
-#if USE_STATIC_IP
-IPAddress kStaticIp(192, 168, 43, 100);
-IPAddress kStaticGateway(192, 168, 43, 1);
-IPAddress kStaticSubnet(255, 255, 255, 0);
-IPAddress kStaticDns(8, 8, 8, 8);
-#endif
+#define FRONT_DT   4
+#define FRONT_SCK  5
+#define BACK_DT    18
+#define BACK_SCK   19
+#define FRONT_CAL  433.57f
+#define BACK_CAL   434.68f
 
 #define GPS_RX_PIN 16
 #define GPS_TX_PIN 17
-#define GPS_BAUD 9600
+#define GPS_BAUD   9600
 
-bool wsClientConnected = false;
-float frontWeight = 0.0f;
-float backWeight = 0.0f;
-float totalWeight = 0.0f;
-float frontPct = 0.0f;
-float backPct = 0.0f;
-bool gpsValid = false;
-double latitude = 0.0;
-double longitude = 0.0;
-bool hx711FrontReady = false;
-bool hx711BackReady = false;
-int gpsSatellites = 0;
+// Starting point (from GPS screenshot)
+const float START_LAT = 14.64142f;
+const float START_LNG = 121.09264f;
+const float START_RADIUS = 150.0f;  // meters
 
-float frontScaleFactor = FRONT_CAL;
-float backScaleFactor = BACK_CAL;
+// Finish: LRT-2 Marikina-Pasig Station
+// 1800 Marikina-Infanta Hwy, San Roque, Marikina
+const float FINISH_LAT = 14.620387f;
+const float FINISH_LNG = 121.100275f;
+const float FINISH_RADIUS = 150.0f;  // meters
 
-// EMA filtered weights
-float frontWeightFiltered = 0.0f;
-float backWeightFiltered = 0.0f;
+#define MAX_WEIGHT_G     100.0f
+#define EMA_ALPHA        0.3f
+#define SAMPLES_PER_READ 10
+#define DEADBAND_G       2.0f
 
-// Offset/reference weights (calibrated with bus model loaded)
-float frontOffsetWeight = 0.0f;
-float backOffsetWeight = 0.0f;
+const unsigned long kSendIntervalMs = 1000;
 
-// Startup baseline capture states
-bool startupBaselineCaptured = false;
-int baselineSampleCount = 0;
-int baselineStableCount = 0;
-float baselineFrontSum = 0.0f;
-float baselineBackSum = 0.0f;
-float baselineFrontPrev = 0.0f;
-float baselineBackPrev = 0.0f;
+enum TripPhase : uint8_t {
+  AT_START = 0,
+  DEPARTED_START = 1,
+  EN_ROUTE = 2,
+  ARRIVED_FINISH = 3,
+};
 
-// Previous weights for delta detection
-float frontWeightPrev = 0.0f;
-float backWeightPrev = 0.0f;
-bool frontWeightChanged = false;
-bool backWeightChanged = false;
-float frontWeightDelta = 0.0f;
-float backWeightDelta = 0.0f;
+TripPhase gTripPhase = AT_START;
+TripPhase gCandidatePhase = AT_START;
+uint8_t gStablePhaseReads = 0;
 
-// High-precision mode flag
-bool highPrecisionMode = true;
+const int   kMinSatellitesForGeofence = 4;
+const float kExitHysteresisMeters = 30.0f;
+const uint8_t kStableReadsNeeded = 3;
 
-// GPS averaging buffers
-double latBuffer[GPS_AVG_SIZE];
-double lngBuffer[GPS_AVG_SIZE];
-int gpsBufferIndex = 0;
-bool gpsBufferFull = false;
+const char* phaseToString(TripPhase phase) {
+  switch (phase) {
+    case AT_START: return "AT_START";
+    case DEPARTED_START: return "DEPARTED_START";
+    case EN_ROUTE: return "EN_ROUTE";
+    case ARRIVED_FINISH: return "ARRIVED_FINISH";
+    default: return "UNKNOWN";
+  }
+}
 
-// Task handles
-TaskHandle_t sensorTaskHandle;
-TaskHandle_t websocketTaskHandle;
+float distanceMeters(double lat1, double lng1, double lat2, double lng2) {
+  const double r = 6371000.0;
+  const double dLat = radians(lat2 - lat1);
+  const double dLng = radians(lng2 - lng1);
+  const double a = sin(dLat / 2.0) * sin(dLat / 2.0) +
+                   cos(radians(lat1)) * cos(radians(lat2)) *
+                   sin(dLng / 2.0) * sin(dLng / 2.0);
+  const double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+  return (float)(r * c);
+}
 
-// Mutex for shared data
+TripPhase computePhase(float distStart, float distFinish, TripPhase current) {
+  const float startExitRadius = START_RADIUS + kExitHysteresisMeters;
+
+  if (distFinish <= FINISH_RADIUS) {
+    return ARRIVED_FINISH;
+  }
+  if (distStart <= START_RADIUS) {
+    return AT_START;
+  }
+  if (current == AT_START && distStart > startExitRadius) {
+    return DEPARTED_START;
+  }
+  return EN_ROUTE;
+}
+
+void updateGeofencePhase(bool gpsValid, int satellites, double lat, double lng,
+                        float& distStart, float& distFinish, TripPhase& phase) {
+  distStart = -1.0f;
+  distFinish = -1.0f;
+
+  if (!gpsValid || satellites < kMinSatellitesForGeofence) {
+    phase = gTripPhase;
+    return;
+  }
+
+  distStart = distanceMeters(lat, lng, START_LAT, START_LNG);
+  distFinish = distanceMeters(lat, lng, FINISH_LAT, FINISH_LNG);
+  TripPhase proposed = computePhase(distStart, distFinish, gTripPhase);
+
+  if (proposed == gTripPhase) {
+    gCandidatePhase = proposed;
+    gStablePhaseReads = 0;
+  } else {
+    if (proposed == gCandidatePhase) {
+      if (gStablePhaseReads < 255) gStablePhaseReads++;
+      if (gStablePhaseReads >= kStableReadsNeeded) {
+        gTripPhase = proposed;
+        gStablePhaseReads = 0;
+      }
+    } else {
+      gCandidatePhase = proposed;
+      gStablePhaseReads = 1;
+    }
+  }
+
+  phase = gTripPhase;
+}
+
+// ── Peripherals ───────────────────────────────────────────────────────────────
+HX711            frontScale, backScale;
+TinyGPSPlus      gps;
+WebSocketsServer webSocket(kWsPort);
+
 SemaphoreHandle_t dataMutex;
+TaskHandle_t      sensorTaskHandle, wsTaskHandle;
 
-String loadStatusString(float totalG, float frontPct, float backPct) {
-  if (totalG >= MAX_WEIGHT_GRAMS) return "OVERLOAD";
-  if (totalG >= MIN_WEIGHT_FOR_BALANCE_G) {
-    if (frontPct > IMBALANCE_THRESHOLD_PCT) return "IMBALANCE_FRONT";
-    if (backPct > IMBALANCE_THRESHOLD_PCT) return "IMBALANCE_BACK";
-  }
-  return "NORMAL";
-}
+// ── Shared data ───────────────────────────────────────────────────────────────
+struct SensorData {
+  float  totalG     = 0.0f;
+  bool   overload   = false;
+  double latitude   = 0.0, longitude = 0.0;
+  bool   gpsValid   = false;
+  int    satellites = 0;
+  float  distStartM = -1.0f;
+  float  distFinishM = -1.0f;
+  TripPhase tripPhase = AT_START;
+  bool   frontReady = false, backReady = false;
+} data;
 
-WebSocketsServer webSocket(kWebSocketPort);
-HX711 frontScale;
-HX711 backScale;
-TinyGPSPlus gps;
+bool wsConnected = false;
 
-// Sensor task: handles sensor updates
-void sensorTask(void *pvParameters) {
+// ── Sensor task ───────────────────────────────────────────────────────────────
+void sensorTask(void* /*pv*/) {
+  float emaFront = 0.0f, emaBack = 0.0f;
+  bool  initFront = false, initBack = false;
+
   while (true) {
+    while (Serial2.available()) gps.encode(Serial2.read());
+
+    bool fOk = frontScale.is_ready();
+    bool bOk = backScale.is_ready();
+    float rawFront = fOk ? frontScale.get_units(SAMPLES_PER_READ) : 0.0f;
+    float rawBack  = bOk ? backScale.get_units(SAMPLES_PER_READ) : 0.0f;
+
+    if (!initFront) { emaFront = rawFront; initFront = true; }
+    else             emaFront = EMA_ALPHA * rawFront + (1.0f - EMA_ALPHA) * emaFront;
+
+    if (!initBack)  { emaBack  = rawBack;  initBack  = true; }
+    else             emaBack  = EMA_ALPHA * rawBack  + (1.0f - EMA_ALPHA) * emaBack;
+
+    float total = max(0.0f, emaFront) + max(0.0f, emaBack);
+    float prevTotal = data.totalG;
+    if (abs(total - prevTotal) < DEADBAND_G) total = prevTotal;
+
+    bool   valid = gps.location.isValid();
+    double lat   = valid ? gps.location.lat() : data.latitude;
+    double lng   = valid ? gps.location.lng() : data.longitude;
+    int    sats  = gps.satellites.isValid() ? (int)gps.satellites.value() : 0;
+
+    float distStartM = -1.0f;
+    float distFinishM = -1.0f;
+    TripPhase phase = gTripPhase;
+    updateGeofencePhase(valid, sats, lat, lng, distStartM, distFinishM, phase);
+
     xSemaphoreTake(dataMutex, portMAX_DELAY);
-    updateSensors();
+    data.totalG     = total;
+    data.overload   = (total >= MAX_WEIGHT_G);
+    data.latitude   = lat;
+    data.longitude  = lng;
+    data.gpsValid   = valid;
+    data.satellites = sats;
+    data.distStartM = distStartM;
+    data.distFinishM = distFinishM;
+    data.tripPhase  = phase;
+    data.frontReady = fOk;
+    data.backReady  = bOk;
     xSemaphoreGive(dataMutex);
-    vTaskDelay(pdMS_TO_TICKS(1000));  // Update every 1s
+
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
-// WebSocket task: handles WebSocket and sending
-void websocketTask(void *pvParameters) {
+// ── WS task ───────────────────────────────────────────────────────────────────
+void wsTask(void* /*pv*/) {
+  unsigned long lastSend = 0;
+  unsigned long lastTare = 0;
+
   while (true) {
     webSocket.loop();
+
     unsigned long now = millis();
-    if (now - lastSendMs >= kSendIntervalMs) {
-      lastSendMs = now;
+
+    // Periodic re-tare every 5 minutes to correct drift
+    if (now - lastTare >= 300000UL) {
+      lastTare = now;
+      if (frontScale.is_ready()) frontScale.tare(10);
+      if (backScale.is_ready())  backScale.tare(10);
+    }
+
+    if (now - lastSend >= kSendIntervalMs) {
+      lastSend = now;
+
+      SensorData snap;
       xSemaphoreTake(dataMutex, portMAX_DELAY);
-      sendStatus();
+      snap = data;
       xSemaphoreGive(dataMutex);
-    }
-    vTaskDelay(pdMS_TO_TICKS(100));  // Check frequently
-  }
-}
 
-void updateSensors() {
-  while (Serial2.available()) {
-    gps.encode(Serial2.read());
-  }
+      String jsonPayload = "{";
+      jsonPayload += "\"latitude\":" + String(snap.latitude, 6) + ",";
+      jsonPayload += "\"longitude\":" + String(snap.longitude, 6) + ",";
+      jsonPayload += "\"gps_valid\":" + String(snap.gpsValid ? "true" : "false") + ",";
+      jsonPayload += "\"satellites\":" + String(snap.satellites) + ",";
+      jsonPayload += "\"trip_phase\":\"" + String(phaseToString(snap.tripPhase)) + "\",";
+      jsonPayload += "\"dist_to_start_m\":" + String(snap.distStartM, 2) + ",";
+      jsonPayload += "\"dist_to_finish_m\":" + String(snap.distFinishM, 2) + ",";
+      jsonPayload += "\"weight_g\":" + String(snap.totalG, 2) + ",";
+      jsonPayload += "\"status\":\"" + String(snap.overload ? "OVERLOAD" : "NORMAL") + "\"";
+      jsonPayload += "}";
 
-  if (gps.location.isValid()) {
-    // Add to GPS buffer for averaging
-    latBuffer[gpsBufferIndex] = gps.location.lat();
-    lngBuffer[gpsBufferIndex] = gps.location.lng();
-    gpsBufferIndex = (gpsBufferIndex + 1) % GPS_AVG_SIZE;
-    if (gpsBufferIndex == 0) gpsBufferFull = true;
+      // Send to backend via HTTP POST only when station Wi-Fi is connected.
+      if (WiFi.status() == WL_CONNECTED) {
+        HTTPClient http;
+        http.begin(kBackendUrl);
+        http.addHeader("Content-Type", "application/json");
 
-    // Average GPS if buffer full
-    if (gpsBufferFull) {
-      double latSum = 0, lngSum = 0;
-      for (int i = 0; i < GPS_AVG_SIZE; i++) {
-        latSum += latBuffer[i];
-        lngSum += lngBuffer[i];
-      }
-      latitude = latSum / GPS_AVG_SIZE;
-      longitude = lngSum / GPS_AVG_SIZE;
-    } else {
-      latitude = gps.location.lat();
-      longitude = gps.location.lng();
-    }
-  }
-  gpsValid = gps.location.isValid();
-  gpsSatellites = gps.satellites.isValid() ? (int)gps.satellites.value() : 0;
-
-  const bool frontOk = frontScale.is_ready();
-  const bool backOk = backScale.is_ready();
-  hx711FrontReady = frontOk;
-  hx711BackReady = backOk;
-
-  // Use high-precision sampling (50 samples vs 10)
-  int samples = highPrecisionMode ? SAMPLES_PER_READ : 10;
-  float rawFront = frontOk ? frontScale.get_units(samples) : 0.0f;
-  float rawBack = backOk ? backScale.get_units(samples) : 0.0f;
-
-  // Capture bus baseline at startup if not already done
-  if (!startupBaselineCaptured) {
-    float totalRaw = rawFront + rawBack;
-    if (totalRaw >= BASELINE_MIN_MODEL_WEIGHT) {
-      bool stable = (baselineSampleCount == 0) || (fabs(rawFront - baselineFrontPrev) < BASELINE_STABLE_THRESHOLD && fabs(rawBack - baselineBackPrev) < BASELINE_STABLE_THRESHOLD);
-
-      if (stable) {
-        baselineStableCount++;
-        baselineFrontSum += rawFront;
-        baselineBackSum += rawBack;
-        baselineSampleCount++;
+        int httpResponseCode = http.POST(jsonPayload);
+        if (httpResponseCode > 0) {
+          Serial.printf("HTTP POST success: %d\n", httpResponseCode);
+        } else {
+          Serial.printf("HTTP POST failed: %d\n", httpResponseCode);
+        }
+        http.end();
       } else {
-        baselineStableCount = 0;
-        baselineSampleCount = 0;
-        baselineFrontSum = 0.0f;
-        baselineBackSum = 0.0f;
+        Serial.println("HTTP POST skipped: WiFi disconnected");
       }
 
-      baselineFrontPrev = rawFront;
-      baselineBackPrev = rawBack;
+      // Also broadcast to WebSocket for local clients
+      String wsPayload = "{\"type\":\"telemetry\"";
+      wsPayload += ",\"weight_g\":"    + String(snap.totalG,   2);
+      wsPayload += ",\"status\":\""    + String(snap.overload ? "OVERLOAD" : "NORMAL") + "\"";
+      wsPayload += ",\"satellites\":"  + String(snap.satellites);
+      wsPayload += ",\"latitude\":"    + String(snap.latitude,  6);
+      wsPayload += ",\"longitude\":"   + String(snap.longitude, 6);
+      wsPayload += ",\"gps_valid\":"   + String(snap.gpsValid   ? "true" : "false");
+      wsPayload += ",\"trip_phase\":\"" + String(phaseToString(snap.tripPhase)) + "\"";
+      wsPayload += ",\"dist_to_start_m\":" + String(snap.distStartM, 2);
+      wsPayload += ",\"dist_to_finish_m\":" + String(snap.distFinishM, 2);
+      wsPayload += ",\"front_ready\":" + String(snap.frontReady ? "true" : "false");
+      wsPayload += ",\"back_ready\":"  + String(snap.backReady  ? "true" : "false");
+      wsPayload += "}";
 
-      if (baselineStableCount >= BASELINE_STABLE_READS && baselineSampleCount >= BASELINE_SAMPLE_COUNT) {
-        frontOffsetWeight = baselineFrontSum / baselineSampleCount;
-        backOffsetWeight = baselineBackSum / baselineSampleCount;
-        startupBaselineCaptured = true;
-        frontWeightPrev = 0.0f;
-        backWeightPrev = 0.0f;
-        Serial.printf("✓ Startup baseline LOCKED: front %.1f g, back %.1f g\n", frontOffsetWeight, backOffsetWeight);
-      }
-    } else {
-      baselineStableCount = 0;
-      baselineSampleCount = 0;
-      baselineFrontSum = 0.0f;
-      baselineBackSum = 0.0f;
-      Serial.println("Baseline pending... (need weight >= 100g to start)");
+      Serial.println(wsPayload);
+      if (wsConnected) webSocket.broadcastTXT(wsPayload);
     }
-  }
 
-  // Subtract offset for net weight inside bus after baseline capture or manual offset
-  if (startupBaselineCaptured || frontOffsetWeight != 0.0f || backOffsetWeight != 0.0f) {
-    rawFront -= frontOffsetWeight;
-    rawBack -= backOffsetWeight;
-  }
-
-  // Apply EMA filtering
-  if (frontWeightFiltered == 0.0f) frontWeightFiltered = rawFront;  // Initialize
-  else frontWeightFiltered = EMA_ALPHA * rawFront + (1 - EMA_ALPHA) * frontWeightFiltered;
-
-  if (backWeightFiltered == 0.0f) backWeightFiltered = rawBack;
-  else backWeightFiltered = EMA_ALPHA * rawBack + (1 - EMA_ALPHA) * backWeightFiltered;
-
-  // Apply threshold based on mode
-  float threshold = highPrecisionMode ? WEIGHT_DELTA_THRESHOLD : MIN_WEIGHT_G;
-  frontWeight = (frontWeightFiltered < 0.0f) ? 0.0f : frontWeightFiltered;
-  backWeight = (backWeightFiltered < 0.0f) ? 0.0f : backWeightFiltered;
-
-  // Track weight deltas for change detection
-  frontWeightDelta = fabs(frontWeight - frontWeightPrev);
-  backWeightDelta = fabs(backWeight - backWeightPrev);
-  frontWeightChanged = (frontWeightDelta > threshold);
-  backWeightChanged = (backWeightDelta > threshold);
-  frontWeightPrev = frontWeight;
-  backWeightPrev = backWeight;
-
-  totalWeight = frontWeight + backWeight;
-  if (totalWeight > 0) {
-    frontPct = (frontWeight / totalWeight) * 100.0f;
-    backPct = (backWeight / totalWeight) * 100.0f;
-  } else {
-    frontPct = 0.0f;
-    backPct = 0.0f;
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
-void sendStatus() {
-  String status = loadStatusString(totalWeight, frontPct, backPct);
-
-  // ★ speed_kmh field removed from JSON
-  String payload = "{\"type\":\"telemetry\"";
-  payload += ",\"weight_g\":" + String(totalWeight, 1);
-  payload += ",\"front_g\":" + String(frontWeight, 1);
-  payload += ",\"back_g\":" + String(backWeight, 1);
-  payload += ",\"front_pct\":" + String(frontPct, 1);
-  payload += ",\"back_pct\":" + String(backPct, 1);
-  payload += ",\"status\":\"" + status + "\"";
-  payload += ",\"satellites\":" + String(gpsSatellites);
-  payload += ",\"latitude\":" + String(latitude, 6);
-  payload += ",\"longitude\":" + String(longitude, 6);
-  payload += ",\"gps_valid\":" + String(gpsValid ? "true" : "false");
-  payload += ",\"front_ready\":" + String(hx711FrontReady ? "true" : "false");
-  payload += ",\"back_ready\":" + String(hx711BackReady ? "true" : "false");
-  payload += ",\"front_delta_g\":" + String(frontWeightDelta, 1);
-  payload += ",\"back_delta_g\":" + String(backWeightDelta, 1);
-  payload += ",\"front_changed\":" + String(frontWeightChanged ? "true" : "false");
-  payload += ",\"back_changed\":" + String(backWeightChanged ? "true" : "false");
-  payload += ",\"precision_mode\":\"" + String(highPrecisionMode ? "high" : "normal") + "\"";
-  payload += ",\"baseline_captured\":" + String(startupBaselineCaptured ? "true" : "false");
-  payload += ",\"has_hx711_lib\":true";
-  payload += ",\"has_gps_lib\":true";
-  payload += "}";
-
-  Serial.println(payload);
-  if (wsClientConnected) {
-    webSocket.broadcastTXT(payload);
-  }
-}
-
-void setScaleFactor(HX711 &scale, float &scaleFactor, float newFactor, const char *name) {
-  scaleFactor = newFactor;
-  scale.set_scale(scaleFactor);
-  Serial.printf("%s scale factor updated to %.2f\n", name, scaleFactor);
-}
-
-void calibrateScale(HX711 &scale, float &scaleFactor, const char *name, float knownGrams) {
-  if (!scale.is_ready()) {
-    Serial.printf("%s HX711 not ready, cannot calibrate.\n", name);
-    return;
-  }
-
-  Serial.printf("Taring %s scale before calibration...\n", name);
-  scale.tare(10);
-  delay(500);
-
-  Serial.printf("Place a known %.2fg weight on the %s scale and press Enter...\n", knownGrams, name);
-  while (!Serial.available()) {
-    delay(100);
-  }
-  Serial.readStringUntil('\n');
-
-  float currentReading = scale.get_units(20);
-  if (currentReading <= 0.0f) {
-    Serial.printf("%s current reading is %.2f after tare. Check the weight and wiring.\n", name, currentReading);
-    return;
-  }
-
-  float newFactor = scaleFactor * (currentReading / knownGrams);
-  if (newFactor <= 0.0f) {
-    Serial.printf("Invalid new %s scale factor computed.\n", name);
-    return;
-  }
-
-  setScaleFactor(scale, scaleFactor, newFactor, name);
-  Serial.printf("Calibration complete: %s should now read %.2f g for the known weight.\n", name, knownGrams);
-}
-
-void printCalibrationHelp() {
-  Serial.println("Calibration commands:");
-  Serial.println("  cal front 907.185   -> calibrate front scale using 2 lb weight");
-  Serial.println("  cal back 907.185    -> calibrate back scale using 2 lb weight");
-  Serial.println("  setcal front 434.68 -> set front scale factor directly");
-  Serial.println("  setcal back 434.68  -> set back scale factor directly");
-  Serial.println("  tare front          -> tare front scale");
-  Serial.println("  tare back           -> tare back scale");
-  Serial.println("  tare all            -> tare both scales");
-  Serial.println("  setoffset front     -> set front offset (bus weight reference)");
-  Serial.println("  setoffset back      -> set back offset (bus weight reference)");
-  Serial.println("  setoffset all       -> set both offsets");
-  Serial.println("  precision high      -> enable high-precision clay detection");
-  Serial.println("  precision normal    -> disable high-precision mode");
-  Serial.println("  status              -> show current settings and live values");
-  Serial.println("  help                -> print this command list");
-}
-
-void printStatus() {
-  Serial.printf("Front scale factor: %.2f\n", frontScaleFactor);
-  Serial.printf("Back scale factor: %.2f\n", backScaleFactor);
-  Serial.printf("Front offset: %.1fg, Back offset: %.1fg\n", frontOffsetWeight, backOffsetWeight);
-  Serial.printf("Baseline captured: %s\n", startupBaselineCaptured ? "YES" : "NO");
-  Serial.printf("Front: %.1fg (Δ%.1fg), Back: %.1fg (Δ%.1fg)\n", frontWeight, frontWeightDelta, backWeight, backWeightDelta);
-  Serial.printf("Total: %.1fg, Front %%: %.1f, Back %%: %.1f\n", totalWeight, frontPct, backPct);
-  Serial.printf("Status: %s, Precision Mode: %s\n", loadStatusString(totalWeight, frontPct, backPct).c_str(), highPrecisionMode ? "HIGH" : "NORMAL");
-}
-
-void processSerialCommands() {
-  if (!Serial.available()) return;
-
-  String line = Serial.readStringUntil('\n');
-  line.trim();
-  if (line.length() == 0) return;
-
-  if (line.equalsIgnoreCase("help")) {
-    printCalibrationHelp();
-    return;
-  }
-
-  if (line.startsWith("cal ")) {
-    if (line.startsWith("cal front ")) {
-      float grams = line.substring(10).toFloat();
-      if (grams <= 0) grams = 907.185f;
-      calibrateScale(frontScale, frontScaleFactor, "Front", grams);
-    } else if (line.startsWith("cal back ")) {
-      float grams = line.substring(9).toFloat();
-      if (grams <= 0) grams = 907.185f;
-      calibrateScale(backScale, backScaleFactor, "Back", grams);
-    } else {
-      Serial.println("Unknown cal command. Use 'help' for syntax.");
-    }
-    return;
-  }
-
-  if (line.startsWith("setcal ")) {
-    if (line.startsWith("setcal front ")) {
-      float factor = line.substring(13).toFloat();
-      if (factor > 0) setScaleFactor(frontScale, frontScaleFactor, factor, "Front");
-    } else if (line.startsWith("setcal back ")) {
-      float factor = line.substring(12).toFloat();
-      if (factor > 0) setScaleFactor(backScale, backScaleFactor, factor, "Back");
-    } else {
-      Serial.println("Unknown setcal command. Use 'help' for syntax.");
-    }
-    return;
-  }
-
-  if (line.equalsIgnoreCase("tare front")) {
-    if (frontScale.is_ready()) frontScale.tare(10);
-    Serial.println("Front scale tared.");
-    return;
-  }
-  if (line.equalsIgnoreCase("tare back")) {
-    if (backScale.is_ready()) backScale.tare(10);
-    Serial.println("Back scale tared.");
-    return;
-  }
-  if (line.equalsIgnoreCase("tare all")) {
-    if (frontScale.is_ready()) frontScale.tare(10);
-    if (backScale.is_ready()) backScale.tare(10);
-    Serial.println("Both scales tared.");
-    return;
-  }
-  if (line.equalsIgnoreCase("status")) {
-    printStatus();
-    return;
-  }
-
-  if (line.startsWith("setoffset ")) {
-    if (line.startsWith("setoffset front")) {
-      frontOffsetWeight = frontWeightFiltered;
-      Serial.printf("Front offset set to %.2f g\n", frontOffsetWeight);
-    } else if (line.startsWith("setoffset back")) {
-      backOffsetWeight = backWeightFiltered;
-      Serial.printf("Back offset set to %.2f g\n", backOffsetWeight);
-    } else if (line.startsWith("setoffset all")) {
-      frontOffsetWeight = frontWeightFiltered;
-      backOffsetWeight = backWeightFiltered;
-      Serial.printf("Offsets set: Front=%.2f g, Back=%.2f g\n", frontOffsetWeight, backOffsetWeight);
-    }
-    return;
-  }
-
-  if (line.startsWith("precision ")) {
-    if (line.startsWith("precision high")) {
-      highPrecisionMode = true;
-      Serial.println("High-precision mode ENABLED (50 samples/read, ultra-sensitive)");
-    } else if (line.startsWith("precision normal")) {
-      highPrecisionMode = false;
-      Serial.println("High-precision mode DISABLED (normal sensitivity)");
-    }
-    return;
-  }
-
-  Serial.println("Unknown command. Type 'help'.");
-}
-
-void onWebSocketEvent(uint8_t clientNum, WStype_t type, uint8_t *payload, size_t length) {
+// ── WebSocket events ──────────────────────────────────────────────────────────
+void onWsEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
-      wsClientConnected = true;
-      Serial.printf("WS client connected: %u\n", clientNum);
+      wsConnected = true;
+      Serial.printf("WS client %u connected\n", clientNum);
       break;
+
     case WStype_DISCONNECTED:
-      wsClientConnected = (webSocket.connectedClients() > 0);
-      Serial.printf("WS client disconnected: %u\n", clientNum);
+      wsConnected = (webSocket.connectedClients() > 0);
+      Serial.printf("WS client %u disconnected\n", clientNum);
       break;
-    case WStype_TEXT:
-      // Simple auth check
-      if (length > 0) {
-        String msg = String((char *)payload);
-        if (msg.startsWith(AUTH_TOKEN)) {
-          Serial.println("Auth successful");
-          // Check for tare command
-          if (msg.indexOf("tare") != -1) {
-            xSemaphoreTake(dataMutex, portMAX_DELAY);
-            if (frontScale.is_ready()) frontScale.tare(10);
-            if (backScale.is_ready()) backScale.tare(10);
-            frontWeightFiltered = 0.0f;  // Reset filter
-            backWeightFiltered = 0.0f;
-            xSemaphoreGive(dataMutex);
-            Serial.println("Tared scales");
-          }
-        } else {
-          Serial.println("Auth failed");
-          webSocket.disconnect(clientNum);
-        }
+
+    case WStype_TEXT: {
+      if (length == 0) break;
+      String msg = String((char*)payload);
+      if (!msg.startsWith(kAuthToken)) {
+        Serial.println("Auth failed");
+        webSocket.disconnect(clientNum);
+        break;
+      }
+      Serial.println("Auth OK");
+      if (msg.indexOf("tare") != -1) {
+        // No mutex here — avoids deadlock with periodic tare
+        if (frontScale.is_ready()) frontScale.tare(10);
+        if (backScale.is_ready())  backScale.tare(10);
+        Serial.println("Scales tared");
       }
       break;
-    default:
-      break;
+    }
+    default: break;
   }
 }
 
-void connectToHotspot() {
-  WiFi.mode(WIFI_STA);
-#if USE_STATIC_IP
-  if (!WiFi.config(kStaticIp, kStaticGateway, kStaticSubnet, kStaticDns)) {
-    Serial.println("WiFi.config failed — falling back to DHCP");
+// ── Serial commands ───────────────────────────────────────────────────────────
+float frontCal = FRONT_CAL, backCal = BACK_CAL;
+
+void printStatus() {
+  xSemaphoreTake(dataMutex, portMAX_DELAY);
+  SensorData s = data;
+  xSemaphoreGive(dataMutex);
+  Serial.printf("Total: %.2f g  |  %s\n", s.totalG, s.overload ? "OVERLOAD" : "NORMAL");
+  Serial.printf("GPS: %s  Sats: %d  Lat: %.6f  Lng: %.6f\n",
+    s.gpsValid ? "valid" : "no fix", s.satellites, s.latitude, s.longitude);
+  Serial.printf("Phase: %s  DistStart: %.2f m  DistFinish: %.2f m\n",
+    phaseToString(s.tripPhase), s.distStartM, s.distFinishM);
+}
+
+void calibrateScale(HX711& scale, float& factor, const char* name, float knownG) {
+  if (!scale.is_ready()) { Serial.printf("%s not ready\n", name); return; }
+  scale.tare(10);
+  Serial.printf("Place %.1f g on %s scale then press Enter...\n", knownG, name);
+  while (!Serial.available()) delay(100);
+  Serial.readStringUntil('\n');
+  float reading = scale.get_units(20);
+  if (reading <= 0.0f) { Serial.printf("Bad reading: %.2f\n", reading); return; }
+  factor = factor * (reading / knownG);
+  scale.set_scale(factor);
+  Serial.printf("%s cal factor -> %.4f\n", name, factor);
+}
+
+void processSerial() {
+  if (!Serial.available()) return;
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.isEmpty()) return;
+
+  if (line.equalsIgnoreCase("status")) { printStatus(); return; }
+
+  if (line.equalsIgnoreCase("tare") || line.equalsIgnoreCase("tare all")) {
+    if (frontScale.is_ready()) frontScale.tare(10);
+    if (backScale.is_ready())  backScale.tare(10);
+    Serial.println("Both scales tared");
+    return;
+  }
+  if (line.startsWith("setcal front ")) {
+    float f = line.substring(13).toFloat();
+    if (f > 0) { frontCal = f; frontScale.set_scale(f); Serial.printf("Front cal -> %.4f\n", f); }
+    return;
+  }
+  if (line.startsWith("setcal back ")) {
+    float f = line.substring(12).toFloat();
+    if (f > 0) { backCal = f; backScale.set_scale(f); Serial.printf("Back cal -> %.4f\n", f); }
+    return;
+  }
+  if (line.startsWith("cal front ")) {
+    calibrateScale(frontScale, frontCal, "Front", line.substring(10).toFloat());
+    return;
+  }
+  if (line.startsWith("cal back ")) {
+    calibrateScale(backScale, backCal, "Back", line.substring(9).toFloat());
+    return;
+  }
+  Serial.println("Commands: status | tare | setcal front <n> | setcal back <n> | cal front <g> | cal back <g>");
+}
+
+void connectWiFi() {
+  Serial.printf("Connecting to WiFi SSID '%s'...\n", kSsid);
+  WiFi.begin(kSsid, kPassword);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
+    delay(500);
+    Serial.print('.');
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\nWiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("Static IP configured.");
+    Serial.println("\nWiFi connection failed");
   }
-#endif
-  WiFi.begin(kHotspotSsid, kHotspotPassword);
-
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    updateSensors();
-    delay(100);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.println("WiFi connected.");
-  Serial.print("ESP32 IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Flutter connect to: ws://");
-  Serial.print(WiFi.localIP());
-  Serial.print(":");
-  Serial.println(kWebSocketPort);
 }
 
+// ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
   delay(300);
 
   Serial2.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  Serial.println("GPS: Serial2 started (NEO-6M TX->GPIO16, RX->GPIO17)");
-
-  delay(500);
+  Serial.println("GPS ready");
 
   frontScale.begin(FRONT_DT, FRONT_SCK);
-  frontScale.set_scale(frontScaleFactor);
+  frontScale.set_scale(frontCal);
   backScale.begin(BACK_DT, BACK_SCK);
-  backScale.set_scale(backScaleFactor);
+  backScale.set_scale(backCal);
 
-  unsigned long t0 = millis();
-  while (!frontScale.is_ready() && millis() - t0 < 5000) delay(10);
-  if (frontScale.is_ready()) {
-    Serial.println("Front HX711: OK");
-  } else {
-    Serial.println("Front HX711: NOT READY — check DT/SCK/power");
-  }
+  auto waitReady = [](HX711& s, const char* name) {
+    unsigned long t = millis();
+    while (!s.is_ready() && millis() - t < 5000) delay(10);
+    Serial.printf("%s HX711: %s\n", name, s.is_ready() ? "OK" : "NOT READY");
+  };
+  waitReady(frontScale, "Front");
+  waitReady(backScale,  "Back");
 
-  t0 = millis();
-  while (!backScale.is_ready() && millis() - t0 < 5000) delay(10);
-  if (backScale.is_ready()) {
-    Serial.println("Back HX711: OK");
-  } else {
-    Serial.println("Back HX711: NOT READY — check DT/SCK/power");
-  }
+  Serial.println("Warming up scales (30s)...");
+  delay(30000);
+  frontScale.tare(30);
+  backScale.tare(30);
+  Serial.println("Tare done — baseline set");
 
-  connectToHotspot();
+  connectWiFi();  // Connect to phone hotspot
   webSocket.begin();
-  webSocket.onEvent(onWebSocketEvent);
+  webSocket.onEvent(onWsEvent);
 
-  // Create mutex for shared data
   dataMutex = xSemaphoreCreateMutex();
+  xTaskCreate(sensorTask, "Sensor", 4096, nullptr, 1, &sensorTaskHandle);
+  xTaskCreate(wsTask,     "WS",     4096, nullptr, 2, &wsTaskHandle);
 
-  // Create FreeRTOS tasks
-  xTaskCreate(sensorTask, "SensorTask", SENSOR_STACK_SIZE, NULL, SENSOR_TASK_PRIORITY, &sensorTaskHandle);
-  xTaskCreate(websocketTask, "WebSocketTask", WEBSOCKET_STACK_SIZE, NULL, WEBSOCKET_TASK_PRIORITY, &websocketTaskHandle);
-
-  Serial.println("ESP32 bridge ready with multithreading.");
+  Serial.println("Ready");
 }
 
+// ── Loop ──────────────────────────────────────────────────────────────────────
 void loop() {
-  // Tasks handle everything; loop can be empty or used for monitoring
-  processSerialCommands();
-  vTaskDelay(pdMS_TO_TICKS(200));  // Idle delay
+  processSerial();
+  vTaskDelay(pdMS_TO_TICKS(200));
 }

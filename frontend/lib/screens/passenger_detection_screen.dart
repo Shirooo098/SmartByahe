@@ -163,7 +163,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
           Container(
             padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E5CF6).withOpacity(0.12),
+              color: const Color(0xFF1E5CF6).withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(
@@ -207,14 +207,14 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                   (_isConnected
                           ? const Color(0xFF0FBF6A)
                           : const Color(0xFFFF4444))
-                      .withOpacity(0.12),
+                      .withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color:
                     (_isConnected
                             ? const Color(0xFF0FBF6A)
                             : const Color(0xFFFF4444))
-                        .withOpacity(0.3),
+                        .withValues(alpha: 0.3),
               ),
             ),
             child: Row(
@@ -280,7 +280,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                       border: Border.all(
                         color: const Color(
                           0xFF0FBF6A,
-                        ).withOpacity(0.15 * _pulseAnimation.value),
+                        ).withValues(alpha: 0.15 * _pulseAnimation.value),
                         width: 1.5,
                       ),
                     ),
@@ -293,7 +293,7 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                       border: Border.all(
                         color: const Color(
                           0xFF0FBF6A,
-                        ).withOpacity(0.25 * _pulseAnimation.value),
+                        ).withValues(alpha: 0.25 * _pulseAnimation.value),
                         width: 1.5,
                       ),
                     ),
@@ -303,9 +303,9 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                     height: 64,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: const Color(0xFF0FBF6A).withOpacity(0.1),
+                      color: const Color(0xFF0FBF6A).withValues(alpha: 0.1),
                       border: Border.all(
-                        color: const Color(0xFF0FBF6A).withOpacity(0.6),
+                        color: const Color(0xFF0FBF6A).withValues(alpha: 0.6),
                         width: 2,
                       ),
                     ),
@@ -405,14 +405,14 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
                   (_isOverweight
                           ? const Color(0xFFFF6B6B)
                           : const Color(0xFF0FBF6A))
-                      .withOpacity(0.12),
+                      .withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color:
                     (_isOverweight
                             ? const Color(0xFFFF6B6B)
                             : const Color(0xFF0FBF6A))
-                        .withOpacity(0.45),
+                        .withValues(alpha: 0.45),
               ),
             ),
             child: Column(
@@ -456,9 +456,9 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
             height: 64,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFFFF4444).withOpacity(0.1),
+              color: const Color(0xFFFF4444).withValues(alpha: 0.1),
               border: Border.all(
-                color: const Color(0xFFFF4444).withOpacity(0.4),
+                color: const Color(0xFFFF4444).withValues(alpha: 0.4),
                 width: 2,
               ),
             ),
@@ -563,8 +563,8 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
         ? const Color(0xFF4D8BFF)
         : const Color(0xFFFF6BB3);
     final bgColor = isMale
-        ? const Color(0xFF1E5CF6).withOpacity(0.06)
-        : const Color(0xFFE91E8C).withOpacity(0.06);
+        ? const Color(0xFF1E5CF6).withValues(alpha: 0.06)
+        : const Color(0xFFE91E8C).withValues(alpha: 0.06);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 5),
@@ -572,13 +572,13 @@ class _PassengerDetectionScreenState extends State<PassengerDetectionScreen>
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: accentColor.withOpacity(0.12)),
+        border: Border.all(color: accentColor.withValues(alpha: 0.12)),
       ),
       child: Row(
         children: [
           Icon(
             isMale ? Icons.male_rounded : Icons.female_rounded,
-            color: accentColor.withOpacity(0.7),
+            color: accentColor.withValues(alpha: 0.7),
             size: 14,
           ),
           const SizedBox(width: 8),

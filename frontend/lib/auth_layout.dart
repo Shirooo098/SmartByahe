@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:frontend/screens/role_selection.dart';
+import 'package:smartbyahe/screens/role_selection.dart';
 // import 'screens/homepage.dart';
 
 // import 'screens/landing_page.dart';

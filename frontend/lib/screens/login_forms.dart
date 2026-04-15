@@ -24,7 +24,6 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
   static const Color lightGray = Color(0xFFF5F6FA);
   static const Color textGray = Color(0xFF8A94A6);
   static const Color darkText = Color(0xFF1E2A3B);
-  static const Color orange = Color(0xFFE8630A);
 
   @override
   void dispose() {
@@ -53,8 +52,9 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
 
       if (!doc.exists) {
         await FirebaseAuth.instance.signOut();
-        if (mounted)
+        if (mounted) {
           _showError('Account data not found. Please register again.');
+        }
         return;
       }
 
@@ -63,11 +63,12 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
       // Step 3: Check role matches
       if (savedRole != widget.role) {
         await FirebaseAuth.instance.signOut();
-        if (mounted)
+        if (mounted) {
           _showError(
             'This account is registered as a $savedRole. '
             'Please go back and select ${_capitalize(savedRole ?? 'the correct role')}.',
           );
+        }
         return;
       }
 
@@ -271,7 +272,7 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: navyBlue,
                         foregroundColor: Colors.white,
-                        disabledBackgroundColor: navyBlue.withOpacity(0.6),
+                        disabledBackgroundColor: navyBlue.withValues(alpha: 0.6),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
                         ),
@@ -403,7 +404,7 @@ class _LoginFormScreenState extends State<LoginFormScreen> {
       ),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: textGray.withOpacity(0.7), fontSize: 14),
+        hintStyle: TextStyle(color: textGray.withValues(alpha: 0.7), fontSize: 14),
         prefixIcon: Icon(prefixIcon, color: textGray, size: 20),
         suffixIcon: suffixIcon != null
             ? Padding(

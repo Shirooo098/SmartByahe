@@ -14,6 +14,9 @@ class WeightData {
   final bool? frontReady;
   final bool? backReady;
   final bool? hasHx711Lib;
+  final String tripPhase;
+  final double distToStartM;
+  final double distToFinishM;
 
   const WeightData({
     required this.frontWeight,
@@ -30,6 +33,9 @@ class WeightData {
     this.frontReady,
     this.backReady,
     this.hasHx711Lib,
+    required this.tripPhase,
+    required this.distToStartM,
+    required this.distToFinishM,
   });
 
   bool get isOverload => status == 'OVERLOAD';
@@ -77,6 +83,10 @@ class WeightData {
         : 'NORMAL';
     final gv = j['gps_valid'] ?? j['gpsValid'];
     final gpsValid = _bool(gv);
+    final rawTripPhase = j['trip_phase'] ?? j['tripPhase'];
+    final tripPhase = rawTripPhase is String && rawTripPhase.isNotEmpty
+      ? rawTripPhase
+      : 'UNKNOWN';
 
     return WeightData(
       frontWeight: front,
@@ -93,6 +103,9 @@ class WeightData {
       frontReady: _boolOrNull(j['front_ready']),
       backReady: _boolOrNull(j['back_ready']),
       hasHx711Lib: _boolOrNull(j['has_hx711_lib']),
+      tripPhase: tripPhase,
+      distToStartM: _num(j['dist_to_start_m'] ?? j['distToStartM'], -1.0),
+      distToFinishM: _num(j['dist_to_finish_m'] ?? j['distToFinishM'], -1.0),
     );
   }
 }
